@@ -413,15 +413,11 @@ export function normalizeIndexOptions(
     .sort();
 }
 
-type Prettify<T> = {
-  [K in keyof T]: T[K];
-} & {};
-
 export type ModelResultType<
   T extends Document,
   S extends Selector<T>,
   F extends FieldsOf<T>
-> = Prettify<SelectedFields<SelectorToResultType<T, S>, F>>;
+> = SelectedFields<SelectorToResultType<T, S>, F>;
 
 export const AllModels = new Set<Model<any, any>>();
 
