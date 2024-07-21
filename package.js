@@ -1,7 +1,7 @@
 /* global Package */
 Package.describe({
   name: 'typed:model',
-  version: '0.0.1',
+  version: '0.0.2',
   summary: 'A Zod validated wraper around Meteor\'s Mongo.Collection for your meteor app',
   git: 'https://github.com/copleykj/meteor-typed-model',
   documentation: 'README.md'
