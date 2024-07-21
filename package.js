@@ -3,7 +3,7 @@ Package.describe({
   name: 'typed:model',
   version: '0.0.1',
   summary: 'A Zod validated wraper around Meteor\'s Mongo.Collection for your meteor app',
-  git: 'git@github.com:copleykj/meteor-typed-model.git',
+  git: 'https://github.com/copleykj/meteor-typed-model',
   documentation: 'README.md'
 });
 
@@ -19,6 +19,6 @@ Package.onUse(function(api) {
 Package.onTest(function(api) {
   api.use('ecmascript');
   api.use('tinytest');
-  api.use('model');
+  api.use('typed:model');
   api.mainModule('model-tests.js');
 });

@@ -34,6 +34,13 @@ const Link = withCommon(
 
 export const LinkModel = new Model('link', Link);
 export type LinkType = ModelType<typeof LinkModel>;
+
+LinkModel.insert({ title: 'Google', url: 'https://google.com' });
+
+// Find a link by title and limit the fields returned to just the title.
+// Notice that the return type is properly inferred to only have a title and
+// and no other extraneous fields as you would have with a normal Meteor collection.
+const foundLink = LinkModel.findOneAsync({ title: 'Google' }, { fields: { title: 1 } });
 ```
 
 ## Attribution
