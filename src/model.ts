@@ -1,4 +1,3 @@
-import '../check-versions';
 import { Mongo, MongoInternals } from "meteor/mongo";
 import type {
   Document,

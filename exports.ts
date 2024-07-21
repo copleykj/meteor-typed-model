@@ -1,3 +1,4 @@
+import './check-versions';
 import withCommon from './src/withCommon'; 
 import withTimestamps from './src/withTimestamps';
 import withUsers from './src/withUsers';

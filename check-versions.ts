@@ -1,3 +1,4 @@
+// @ts-expect-error
 import { checkNpmVersions } from 'meteor/tmeasday:check-npm-versions';
 
 checkNpmVersions(
