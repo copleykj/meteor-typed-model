@@ -20,10 +20,10 @@ export type SelectorToResultType<
 > = S extends string
   ? T & { _id: S }
   : S extends Mongo.ObjectID
-    ? T & { _id: S }
-    : z.objectUtil.flatten<
-        T & { [K in keyof S & keyof T]: S[K] extends T[K] ? S[K] : never }
-      >;
+  ? T & { _id: S }
+  : z.objectUtil.flatten<
+    T & { [K in keyof S & keyof T]: S[K] extends T[K] ? S[K] : never }
+  >;
 
 export type FieldsOf<T> = {
   [K in keyof T]?: 1 | 0;
@@ -433,10 +433,10 @@ class Model<
     infer Catchall
   >
     ? z.ZodObject<
-        z.objectUtil.extendShape<Shape, { _id: IdSchema }>,
-        UnknownKeys,
-        Catchall
-      >
+      z.objectUtil.extendShape<Shape, { _id: IdSchema }>,
+      UnknownKeys,
+      Catchall
+    >
     : z.ZodIntersection<Schema, z.ZodObject<{ _id: IdSchema }>>;
 
   relaxedSchema: z.ZodTypeAny;
@@ -445,7 +445,7 @@ class Model<
 
   indexes: ModelIndexSpecification[] = [];
 
-  constructor(name: string, schema: Schema, idSchema?: IdSchema) {
+  constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection }) {
     this.schema =
       schema instanceof z.ZodObject
         ? schema.extend({ _id: idSchema ?? stringId })
@@ -453,7 +453,7 @@ class Model<
     validateSchema(this.schema);
     this.name = name;
     this.relaxedSchema = relaxSchema(this.schema);
-    this.collection = new Mongo.Collection(name);
+    this.collection = collection || new Mongo.Collection(name);
     AllModels.add(this);
   }
 
