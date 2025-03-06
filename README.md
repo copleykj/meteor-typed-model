@@ -17,6 +17,8 @@ meteor npm install zod
 
 ## Usage
 
+### Basic Usage
+
 ```typescript
 import { Model, CustomTypes, SchemaHelpers } from 'meteor/typed:model';
 import type { ModelType } from 'meteor/typed:model';
@@ -32,7 +34,10 @@ const Link = withCommon(
   })
 );
 
-export const LinkModel = new Model('link', Link);
+export const LinkModel = new Model({
+  name: 'links',
+  schema: Link,
+});
 export type LinkType = ModelType<typeof LinkModel>;
 
 LinkModel.insert({ title: 'Google', url: 'https://google.com' });
@@ -41,6 +46,27 @@ LinkModel.insert({ title: 'Google', url: 'https://google.com' });
 // Notice that the return type is properly inferred to only have a title and
 // and no other extraneous fields as you would have with a normal Meteor collection.
 const foundLink = LinkModel.findOneAsync({ title: 'Google' }, { fields: { title: 1 } });
+```
+
+### Usage With Existing Collection
+
+```typescript
+import { Model } from 'meteor/typed:model';
+import type { ModelType } from 'meteor/typed:model';
+import { z } from 'zod';
+
+const User = z.object({
+  // Define schema necessary to accomodate Meteor's data structure for users
+});
+
+export const UserModel = new Model({
+  name: 'users',
+  schema: User,
+  collection: Meteor.users,
+});
+export type UserType = ModelType<typeof User>;
+
+const foundUser = UserModel.findOneAsync({ _id: Meteor.userId() });
 ```
 
 ## Attribution
