@@ -445,7 +445,7 @@ class Model<
 
   indexes: ModelIndexSpecification[] = [];
 
-  constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection }) {
+  constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<z.output<Schema>> }) {
     this.schema =
       schema instanceof z.ZodObject
         ? schema.extend({ _id: idSchema ?? stringId })
