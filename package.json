@@ -1,10 +1,21 @@
 {
+  "scripts": {
+    "test": "TEST_BROWSER_DRIVER=playwright meteor test-packages ./ --once --driver-package meteortesting:mocha",
+    "test:install-browsers": "npx playwright install && meteor npx playwright install-deps"
+  },
   "devDependencies": {
     "@eslint/js": "^8.56.0",
+    "@types/chai": "^4.3.0",
+    "@types/chai-as-promised": "^7.1.8",
     "@types/meteor": "^2.9.8",
+    "@types/mocha": "^10.0.0",
     "@types/node": "^22.13.9",
+    "chai": "^4.5.0",
+    "chai-as-promised": "^8.0.2",
     "eslint": "^8.56.0",
     "globals": "^15.8.0",
+    "mocha": "^11.7.5",
+    "playwright": "^1.48.0",
     "typescript": "^5.5.3",
     "typescript-eslint": "^7.16.1",
     "zod": "^3.24.2"

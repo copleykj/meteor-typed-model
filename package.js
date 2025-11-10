@@ -19,7 +19,17 @@ Package.onUse(function(api) {
 
 Package.onTest(function(api) {
   api.use('ecmascript');
-  api.use('tinytest');
+  api.use('typescript');
+  api.use('mongo');
+  api.use('random');
+  api.use('meteortesting:mocha@3.2.0');
   api.use('typed:model');
-  api.mainModule('model-tests.js');
+
+  // Declare npm dependencies for testing
+  Npm.depends({
+    'playwright': '1.48.0'
+  });
+
+  api.mainModule('tests/main.ts', 'server');
+  api.mainModule('tests/main.ts', 'client');
 });
