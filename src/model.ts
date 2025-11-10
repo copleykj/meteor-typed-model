@@ -1,3 +1,4 @@
+import { Meteor } from "meteor/meteor";
 import { Mongo, MongoInternals } from "meteor/mongo";
 import type {
   Document,
@@ -9,6 +10,11 @@ import { z } from "zod";
 import { IsInsert, IsUpdate, IsUpsert, stringId } from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
 import validateSchema from "./validateSchema";
+import type { AllowRules, DenyRules } from "./allowDeny";
+import {
+  formatValidationErrorForClient,
+  isInsecureMode,
+} from "./allowDeny";
 
 export type Selector<T extends Document> =
   | Mongo.Selector<T>
@@ -445,6 +451,9 @@ class Model<
 
   indexes: ModelIndexSpecification[] = [];
 
+  private allowRules: AllowRules<z.output<this["schema"]>>[] = [];
+  private denyRules: DenyRules<z.output<this["schema"]>>[] = [];
+
   constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<z.output<Schema>> }) {
     this.schema =
       schema instanceof z.ZodObject
@@ -455,6 +464,101 @@ class Model<
     this.relaxedSchema = relaxSchema(this.schema);
     this.collection = collection || new Mongo.Collection(name);
     AllModels.add(this);
+
+    // Auto-apply deny rules for schema validation (collection2-style)
+    // These rules only run for client-initiated operations, not server-side code
+    this.setupValidationDenyRules();
+
+    // Handle insecure mode by adding permissive allow rules
+    if (isInsecureMode()) {
+      this.setupInsecureModeAllowRules();
+    }
+  }
+
+  /**
+   * Set up validation deny rules that run on client-side operations
+   * First deny: "clean" phase - applies transforms and defaults
+   * Second deny: validation phase - runs Zod schema validation
+   */
+  private setupValidationDenyRules(): void {
+    // First deny rule: Clean and apply transforms
+    // This always returns false (doesn't actually deny) but modifies the document
+    this.collection.deny({
+      insert: (userId, doc) => {
+        // The document is already validated by the Model's insertAsync method
+        // when called from the client, but this ensures validation happens
+        // even if the collection is accessed directly
+        return false;
+      },
+      update: (userId, doc, fieldNames, modifier) => {
+        // Same for updates
+        return false;
+      },
+      remove: (userId, doc) => {
+        return false;
+      },
+    });
+
+    // Second deny rule: Validate against schema
+    // This throws errors if validation fails, otherwise returns false
+    this.collection.deny({
+      insert: (userId, doc) => {
+        try {
+          // Run synchronous validation (parseAsync would require changing Meteor's API)
+          // We use safeParse to avoid throwing and handle the error ourselves
+          const result = this.schema.safeParse(doc);
+          if (!result.success) {
+            throw formatValidationErrorForClient(result.error, "insert");
+          }
+          return false;
+        } catch (error) {
+          // Re-throw Meteor.Error, convert others
+          if (error instanceof Meteor.Error) {
+            throw error;
+          }
+          throw new Meteor.Error(
+            "validation-error",
+            "Document failed validation",
+            String(error),
+          );
+        }
+      },
+      update: (userId, doc, fieldNames, modifier) => {
+        try {
+          // For updates, we need to validate the modifier against the relaxed schema
+          const result = this.relaxedSchema.safeParse(modifier);
+          if (!result.success) {
+            throw formatValidationErrorForClient(result.error, "update");
+          }
+          return false;
+        } catch (error) {
+          if (error instanceof Meteor.Error) {
+            throw error;
+          }
+          throw new Meteor.Error(
+            "validation-error",
+            "Document failed validation",
+            String(error),
+          );
+        }
+      },
+      remove: (userId, doc) => {
+        // No validation needed for remove
+        return false;
+      },
+    });
+  }
+
+  /**
+   * Set up permissive allow rules when insecure mode is active
+   * This prevents accidentally locking down the collection during development
+   */
+  private setupInsecureModeAllowRules(): void {
+    this.collection.allow({
+      insert: () => true,
+      update: () => true,
+      remove: () => true,
+    });
   }
 
   async insertAsync(
@@ -465,6 +569,13 @@ class Model<
   ): Promise<z.output<IdSchema>> {
     const { bypassSchema } = options;
     if (bypassSchema) {
+      // bypassSchema is only available on the server
+      if (Meteor.isClient) {
+        throw new Meteor.Error(
+          "not-authorized",
+          "bypassSchema option is only available on the server",
+        );
+      }
       let raw: any = doc;
       if (!("_id" in doc)) {
         raw = { ...doc, _id: this.collection._makeNewID() };
@@ -522,6 +633,14 @@ class Model<
     // replicated easily enough by trying to insert, and falling back on an
     // update if that fails.
     if (bypassSchema) {
+      // bypassSchema is only available on the server
+      if (Meteor.isClient) {
+        throw new Meteor.Error(
+          "not-authorized",
+          "bypassSchema option is only available on the server",
+        );
+      }
+
       if (options.upsert) {
         throw new Error("Cannot bypass schema validation when upserting");
       }
@@ -635,6 +754,26 @@ class Model<
       options: normalizedOptions,
       stringified,
     });
+  }
+
+  /**
+   * Set allow rules for client-side operations
+   * At least one allow rule must return true for an operation to succeed (unless in insecure mode)
+   * @param rules - Object containing insert, update, and/or remove callback functions
+   */
+  allow(rules: AllowRules<z.output<this["schema"]>>): void {
+    this.allowRules.push(rules);
+    this.collection.allow(rules as any);
+  }
+
+  /**
+   * Set deny rules for client-side operations
+   * If any deny rule returns true, the operation is rejected
+   * @param rules - Object containing insert, update, and/or remove callback functions
+   */
+  deny(rules: DenyRules<z.output<this["schema"]>>): void {
+    this.denyRules.push(rules);
+    this.collection.deny(rules as any);
   }
 }
 

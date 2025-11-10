@@ -10,6 +10,7 @@ if (Meteor.isServer) {
   import "./unit/Model.test";
   import "./unit/generateJsonSchema.test";
   import "./unit/validateSchema.test";
+  import "./unit/AllowDeny.test";
 }
 
 // Import client-side test suites
