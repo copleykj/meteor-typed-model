@@ -1,10 +1,18 @@
 # Meteor Typed Model
 
-A Zod validated, type safe wraper around Meteor Mongo Collections.
+A Zod validated, type-safe wrapper around Meteor Mongo Collections with automatic runtime validation and full TypeScript type inference.
 
-## Package Status
+## Features
 
-This package is currently a WIP. Documentation is incomplete, but the code is reliable and has been extracted from the [JollyRoger](https://github.com/deathandmayhem/jolly-roger) project. The package includes comprehensive test coverage migrated from JollyRoger.
+- **Type-Safe**: Full TypeScript type inference for queries, inserts, and updates
+- **Runtime Validation**: Automatic Zod schema validation on all operations
+- **Zero Boilerplate**: Auto-populated timestamps, user tracking, and IDs
+- **Smart Updates**: MongoDB update operators with schema validation
+- **Field Projections**: Return types automatically narrow based on field selection
+- **Client Security**: Automatic validation deny rules with Meteor's allow/deny system
+- **Custom Types**: Pre-built Zod types for common patterns
+- **Schema Helpers**: Easy composition with `withTimestamps`, `withUsers`, and `withCommon`
+- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with comprehensive test coverage
 
 ## Installation
 
@@ -15,58 +23,204 @@ meteor add typed:model
 meteor npm install zod
 ```
 
-## Usage
-
-### Basic Usage
+## Quick Start
 
 ```typescript
-import { Model, CustomTypes, SchemaHelpers } from 'meteor/typed:model';
-import type { ModelType } from 'meteor/typed:model';
+import { Model, CustomTypes } from 'meteor/typed:model';
 import { z } from 'zod';
+
+const { nonEmptyString } = CustomTypes;
+
+// Define your schema
+const TaskSchema = z.object({
+  title: nonEmptyString,
+  completed: z.boolean().default(false),
+});
+
+// Create a model
+const TaskModel = new Model({
+  name: 'tasks',
+  schema: TaskSchema,
+});
+
+// Use it!
+const taskId = await TaskModel.insertAsync({
+  title: 'Learn typed:model',
+  completed: false,
+});
+
+const task = await TaskModel.findOneAsync(taskId);
+console.log(task.title); // Full type safety!
+```
+
+## Getting Started
+
+### Step 1: Define Your Schema
+
+Start by defining a Zod schema for your documents:
+
+```typescript
+import { z } from 'zod';
+import { CustomTypes, SchemaHelpers } from 'meteor/typed:model';
 
 const { nonEmptyString } = CustomTypes;
 const { withCommon } = SchemaHelpers;
 
-const Link = withCommon(
-  z.object({
-    title: nonEmptyString,
-    url: z.string().url(),
-  })
-);
-
-export const LinkModel = new Model({
-  name: 'links',
-  schema: Link,
+// Basic schema
+const LinkSchema = z.object({
+  title: nonEmptyString,
+  url: z.string().url(),
 });
-export type LinkType = ModelType<typeof LinkModel>;
 
-LinkModel.insert({ title: 'Google', url: 'https://google.com' });
-
-// Find a link by title and limit the fields returned to just the title.
-// Notice that the return type is properly inferred to only have a title and
-// and no other extraneous fields as you would have with a normal Meteor collection.
-const foundLink = LinkModel.findOneAsync({ title: 'Google' }, { fields: { title: 1 } });
+// With automatic timestamps and user tracking
+const LinkSchemaWithMeta = withCommon(LinkSchema);
+// Adds: createdAt, updatedAt, createdBy, updatedBy
 ```
 
-### Usage With Existing Collection
+### Step 2: Create a Model
+
+Create a Model instance to wrap your collection:
 
 ```typescript
 import { Model } from 'meteor/typed:model';
 import type { ModelType } from 'meteor/typed:model';
+
+export const LinkModel = new Model({
+  name: 'links',
+  schema: LinkSchemaWithMeta,
+});
+
+// Export the inferred type for use throughout your app
+export type LinkType = ModelType<typeof LinkModel>;
+```
+
+### Step 3: Use Your Model
+
+Use the Model's async methods with full type safety:
+
+```typescript
+// Insert (returns the _id)
+const linkId = await LinkModel.insertAsync({
+  title: 'Meteor Docs',
+  url: 'https://docs.meteor.com',
+});
+
+// Find one
+const link = await LinkModel.findOneAsync(linkId);
+console.log(link.title); // TypeScript knows all fields!
+
+// Update with MongoDB operators
+await LinkModel.updateAsync(linkId, {
+  $set: { title: 'Updated Title' },
+});
+
+// Find with field projection (return type is automatically narrowed!)
+const titleOnly = await LinkModel.findOneAsync(
+  { _id: linkId },
+  { fields: { title: 1 } }
+);
+// titleOnly has type: { _id: string, title: string }
+
+// Query with cursor
+const allLinks = LinkModel.find({}).fetch();
+
+// Remove
+await LinkModel.removeAsync(linkId);
+```
+
+### Step 4: Set Up Client Security
+
+Define allow/deny rules for client-side operations:
+
+```typescript
+// Allow users to insert their own links
+LinkModel.allow({
+  insert: (userId, doc) => {
+    return userId !== null && doc.createdBy === userId;
+  },
+  update: (userId, doc) => {
+    return userId !== null && doc.createdBy === userId;
+  },
+  remove: (userId, doc) => {
+    return userId !== null && doc.createdBy === userId;
+  },
+});
+```
+
+See [Client-Side Security](#client-side-security-with-allowdeny-rules) below for more details.
+
+## Documentation
+
+- **[API Reference](docs/API.md)** - Complete API documentation for Model class and methods
+- **[Custom Types](docs/CUSTOM_TYPES.md)** - Pre-built Zod types for common patterns
+- **[Schema Helpers](docs/SCHEMA_HELPERS.md)** - Composition helpers like `withCommon`, `withTimestamps`, `withUsers`
+- **[Type System](docs/TYPE_SYSTEM.md)** - TypeScript type inference and type utilities
+- **[Advanced Features](docs/ADVANCED.md)** - Schema relaxation, MongoDB operators, indexes
+- **[Migration Guide](docs/MIGRATION.md)** - Migrating from vanilla collections or collection2
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - FAQ and common issues
+- **[Best Practices](docs/BEST_PRACTICES.md)** - Performance, security, and design patterns
+
+## Basic Usage Examples
+
+### Working With Existing Collections
+
+You can wrap existing Meteor collections like `Meteor.users`:
+
+```typescript
+import { Model } from 'meteor/typed:model';
 import { z } from 'zod';
 
-const User = z.object({
-  // Define schema necessary to accomodate Meteor's data structure for users
+const UserSchema = z.object({
+  username: z.string().optional(),
+  emails: z.array(z.object({
+    address: z.string().email(),
+    verified: z.boolean(),
+  })).optional(),
+  // ... define schema to match Meteor's user structure
 });
 
-export const UserModel = new Model({
+const UserModel = new Model({
   name: 'users',
-  schema: User,
+  schema: UserSchema,
   collection: Meteor.users,
 });
-export type UserType = ModelType<typeof User>;
 
-const foundUser = UserModel.findOneAsync({ _id: Meteor.userId() });
+const user = await UserModel.findOneAsync(Meteor.userId()!);
+```
+
+### Type Extraction
+
+Extract TypeScript types from your models:
+
+```typescript
+import type { ModelType } from 'meteor/typed:model';
+
+export const TaskModel = new Model({
+  name: 'tasks',
+  schema: TaskSchema,
+});
+
+// Extract the document type
+export type TaskType = ModelType<typeof TaskModel>;
+
+// Use in functions
+function processTask(task: TaskType) {
+  console.log(task.title);
+}
+```
+
+### MongoDB Update Operators
+
+All MongoDB update operators are validated against your schema:
+
+```typescript
+await TaskModel.updateAsync(taskId, {
+  $set: { title: 'New Title' },
+  $inc: { priority: 1 },
+  $push: { tags: 'urgent' },
+  $addToSet: { watchers: userId },
+  $unset: { dueDate: '' },
+});
 ```
 
 ## Client-Side Security with Allow/Deny Rules
@@ -220,7 +374,7 @@ PostModel.allow({
 });
 ```
 
-**Field-Level Restrictions (Manual):**
+**Field-Level Restrictions:**
 
 ```typescript
 PostModel.deny({
@@ -259,6 +413,8 @@ const PostModel = new Model({ name: 'posts', schema: PostSchema });
 ```
 
 Both packages use the same underlying allow/deny mechanism, so your existing allow/deny rules should work with minimal changes. The main difference is that validation happens automatically without calling `attachSchema()`.
+
+See the [Migration Guide](docs/MIGRATION.md) for detailed migration instructions.
 
 ## Running Tests
 
@@ -321,6 +477,20 @@ The test suite includes **65 comprehensive tests** (61 server-side + 4 client-si
 - **API Availability**: Ensures Model, CustomTypes, and SchemaHelpers are accessible
 - **Model Instantiation**: Confirms Model instances can be created on the client
 
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Check existing issues or create a new one to discuss your idea
+2. Fork the repository and create a feature branch
+3. Write tests for your changes
+4. Ensure all tests pass with `meteor npm test`
+5. Submit a pull request
+
 ## Attribution
 
 This package is composed mostly of code extracted from the [JollyRoger](https://github.com/deathandmayhem/jolly-roger) project created by Evan Broder.
+
+## License
+
+MIT
