@@ -11,6 +11,7 @@ import {
   IsInsert,
   IsUpdate,
   IsUpsert,
+  IsTrustedTransform,
   isDenyUntrusted,
   stringId,
 } from "./customTypes";
@@ -319,6 +320,11 @@ export async function parseMongoModifierAsync<
 // it onto both the message and the first line of the stack trace so it's easier
 // to find.
 export function formatValidationError(error: unknown) {
+  // Only format MongoDB errors on the server (MongoInternals.NpmModules is server-only)
+  if (Meteor.isClient || !MongoInternals.NpmModules?.mongodb?.module) {
+    return;
+  }
+
   const { MongoError } = MongoInternals.NpmModules.mongodb.module;
 
   if (!(error instanceof MongoError)) {
@@ -497,7 +503,14 @@ class Model<
     // First deny rule: Check protected fields (denyUntrusted)
     // This deny rule actually denies (returns true) if client tries to modify protected fields
     this.collection.deny({
-      insert: (userId, doc) => {
+      insert: (userId, doc: any) => {
+        // Skip protected field checks if this is a trusted Model method transform
+        // The marker is added by Model.insertAsync() and removed here
+        if (doc._meteortypedmodelTrusted === true) {
+          delete doc._meteortypedmodelTrusted;
+          return false;
+        }
+
         // Check if any protected fields are being set
         if (this.protectedFields.size === 0) return false;
 
@@ -528,7 +541,26 @@ class Model<
 
         return false;
       },
-      update: (userId, doc, fieldNames, modifier) => {
+      update: (userId, doc, fieldNames, modifier: any) => {
+        // Skip protected field checks if this is a trusted Model method transform
+        // The marker is added by Model.updateAsync()/upsertAsync() and removed here
+        if (modifier.$set?._meteortypedmodelTrusted === true) {
+          delete modifier.$set._meteortypedmodelTrusted;
+          // Clean up empty $set
+          if (Object.keys(modifier.$set).length === 0) {
+            delete modifier.$set;
+          }
+          return false;
+        }
+        if (modifier.$setOnInsert?._meteortypedmodelTrusted === true) {
+          delete modifier.$setOnInsert._meteortypedmodelTrusted;
+          // Clean up empty $setOnInsert
+          if (Object.keys(modifier.$setOnInsert).length === 0) {
+            delete modifier.$setOnInsert;
+          }
+          return false;
+        }
+
         // Check if any protected fields are in the modifier
         if (this.protectedFields.size === 0) return false;
 
@@ -744,6 +776,32 @@ class Model<
       }
     }
 
+    // On client: Check if user is trying to set protected fields directly
+    if (Meteor.isClient && this.protectedFields.size > 0) {
+      for (const field of this.protectedFields) {
+        const fieldParts = field.split(".");
+        let value: any = doc;
+        let exists = true;
+
+        for (const part of fieldParts) {
+          if (value && typeof value === "object" && part in value) {
+            value = value[part];
+          } else {
+            exists = false;
+            break;
+          }
+        }
+
+        if (exists && value !== undefined) {
+          throw new Meteor.Error(
+            "untrusted-field-modification",
+            `Cannot modify protected field '${field}' from client code`,
+            field,
+          );
+        }
+      }
+    }
+
     const parsed: z.output<Schema> = await IsInsert.withValue(
       true,
       async () => {
@@ -751,7 +809,10 @@ class Model<
       },
     );
     try {
-      return await this.collection.insertAsync(parsed);
+      // Add a marker to indicate this is a trusted Model method transform
+      // This marker is checked by deny rules and then removed before insert
+      const markedDoc: any = { ...parsed, _meteortypedmodelTrusted: true };
+      return await this.collection.insertAsync(markedDoc);
     } catch (e) {
       formatValidationError(e);
       throw e;
@@ -816,9 +877,36 @@ class Model<
       }
     }
 
+    // On client: Check if user is trying to modify protected fields directly
+    if (Meteor.isClient && this.protectedFields.size > 0) {
+      const modifiedFields = this.extractModifiedFields(modifier);
+
+      for (const modifiedField of modifiedFields) {
+        for (const protectedField of this.protectedFields) {
+          if (
+            modifiedField === protectedField ||
+            modifiedField.startsWith(protectedField + ".") ||
+            protectedField.startsWith(modifiedField + ".")
+          ) {
+            throw new Meteor.Error(
+              "untrusted-field-modification",
+              `Cannot modify protected field '${protectedField}' from client code`,
+              protectedField,
+            );
+          }
+        }
+      }
+    }
+
     const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
     try {
-      return await this.collection.updateAsync(selector, parsed, mongoOptions);
+      // Add a marker to indicate this is a trusted Model method transform
+      // This marker is checked by deny rules and then removed before update
+      const markedModifier: any = {
+        ...parsed,
+        $set: { ...parsed.$set, _meteortypedmodelTrusted: true }
+      };
+      return await this.collection.updateAsync(selector, markedModifier, mongoOptions);
     } catch (e) {
       formatValidationError(e);
       throw e;
@@ -840,11 +928,38 @@ class Model<
     numberAffected?: number | undefined;
     insertedId?: z.output<IdSchema> | undefined;
   }> {
+    // On client: Check if user is trying to modify protected fields directly
+    if (Meteor.isClient && this.protectedFields.size > 0) {
+      const modifiedFields = this.extractModifiedFields(modifier);
+
+      for (const modifiedField of modifiedFields) {
+        for (const protectedField of this.protectedFields) {
+          if (
+            modifiedField === protectedField ||
+            modifiedField.startsWith(protectedField + ".") ||
+            protectedField.startsWith(modifiedField + ".")
+          ) {
+            throw new Meteor.Error(
+              "untrusted-field-modification",
+              `Cannot modify protected field '${protectedField}' from client code`,
+              protectedField,
+            );
+          }
+        }
+      }
+    }
+
     const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
     try {
+      // Add a marker to indicate this is a trusted Model method transform
+      // This marker is checked by deny rules and then removed before upsert
+      const markedModifier: any = {
+        ...parsed,
+        $setOnInsert: { ...parsed.$setOnInsert, _meteortypedmodelTrusted: true }
+      };
       return (await this.collection.upsertAsync(
         selector,
-        parsed,
+        markedModifier,
         options,
       )) as any;
     } catch (e) {

@@ -367,6 +367,78 @@ describe("Client-side denyUntrusted protection", function () {
     });
   });
 
+  describe("Model method protection (not collection)", function () {
+    it("prevents setting protected field via Model.insertAsync()", async function () {
+      try {
+        await ManualProtected.insertAsync({
+          name: "Hacker",
+          email: "hacker@example.com",
+          isAdmin: true, // Protected field via Model method!
+        });
+        assert.fail("Should have thrown untrusted-field-modification error");
+      } catch (error: any) {
+        assert.equal(error.error, "untrusted-field-modification");
+        assert.include(error.reason, "isAdmin");
+        assert.include(error.reason, "client code");
+      }
+    });
+
+    it("allows Model.insertAsync() when protected fields omitted", async function () {
+      const id = await ManualProtected.insertAsync({
+        name: "Valid User",
+        email: "valid@example.com",
+        // isAdmin omitted - will use default (false)
+      });
+      assert.isString(id);
+    });
+
+    it("prevents updating protected field via Model.updateAsync()", async function () {
+      const id = await ManualProtected.insertAsync({
+        name: "Test",
+        email: "test@example.com",
+      });
+
+      try {
+        await ManualProtected.updateAsync(id, {
+          $set: { isAdmin: true }, // Protected field via Model method!
+        });
+        assert.fail("Should have thrown untrusted-field-modification error");
+      } catch (error: any) {
+        assert.equal(error.error, "untrusted-field-modification");
+        assert.include(error.reason, "isAdmin");
+      }
+    });
+
+    it("prevents setting timestamp via Model.insertAsync()", async function () {
+      try {
+        await Timestamped.insertAsync({
+          name: "Test",
+          createdAt: new Date("2020-01-01"), // Protected field!
+        });
+        assert.fail("Should have thrown untrusted-field-modification error");
+      } catch (error: any) {
+        assert.equal(error.error, "untrusted-field-modification");
+        assert.include(error.reason, "createdAt");
+      }
+    });
+
+    it("prevents updating timestamp via Model.updateAsync()", async function () {
+      const id = await Timestamped.insertAsync({
+        name: "Test",
+      });
+
+      try {
+        await Timestamped.updateAsync(id, {
+          $set: { updatedAt: new Date("2020-01-01") }, // Protected field!
+        });
+        assert.fail("Should have thrown untrusted-field-modification error");
+      } catch (error: any) {
+        assert.equal(error.error, "untrusted-field-modification");
+        assert.include(error.reason, "updatedAt");
+      }
+    });
+  });
+
   describe("Mixed protected and non-protected fields", function () {
     it("allows updating mix of fields when only non-protected modified", async function () {
       const id = await ManualProtected.collection.insertAsync({

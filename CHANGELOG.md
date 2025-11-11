@@ -27,26 +27,19 @@
 
 ### Testing
 
-- Add comprehensive test coverage: **111 tests** (84 server + 27 client)
+- Add comprehensive test coverage: **116 tests** (84 server + 32 client)
   - Server-side unit tests for all Model operations
   - Client-side tests for `denyUntrusted` protection (via Playwright)
+  - Client-side tests for Model method protection (`Model.insertAsync()`, `Model.updateAsync()`)
   - Schema validation and transformation tests
   - Allow/deny rule integration tests
   - Collection2-style automatic validation deny rules
 
-### Enhancements
+### Features
 
-- Add `autopublish` package to test dependencies for client testing
-- Improve error messages for field protection violations
-- Add support for nested protected fields (dot notation)
+- Support for nested protected fields (dot notation)
 - Auto-protect timestamp and user fields in `withTimestamps`, `withUsers`, and `withCommon`
-
-### Internal
-
-- Add Symbol-based metadata marking for `denyUntrusted`
-- Add schema walker to extract protected field paths
-- Add MongoDB modifier field extraction for deny rule checking
-- Add shared test models for client/server testing
+- Clear error messages for field protection violations
 
 ## v0.0.5 (2024)
 

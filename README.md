@@ -13,7 +13,7 @@ A Zod validated, type-safe wrapper around Meteor Mongo Collections with automati
 - **Protected Fields**: `denyUntrusted()` helper prevents privilege escalation attacks
 - **Custom Types**: Pre-built Zod types for common patterns
 - **Schema Helpers**: Easy composition with `withTimestamps`, `withUsers`, and `withCommon`
-- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with **111 tests** (84 server + 27 client)
+- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with **116 tests** (84 server + 32 client)
 
 ## Installation
 
@@ -518,7 +518,7 @@ sudo npx playwright install-deps
 
 ### Test Coverage
 
-The test suite includes **111 comprehensive tests** (84 server-side + 27 client-side):
+The test suite includes **116 comprehensive tests** (84 server-side + 32 client-side):
 
 **Server-Side Tests (84 tests):**
 - **Model CRUD Operations**: Insert, update, upsert, and find operations with schema validation
@@ -531,13 +531,15 @@ The test suite includes **111 comprehensive tests** (84 server-side + 27 client-
 - **Allow/Deny Security**: Auto-applied validation rules, custom allow/deny rules, rule evaluation order, server-only bypassSchema enforcement, error formatting, and integration with Model methods
 - **Protected Fields**: `denyUntrusted()` marker detection, field extraction, schema helper auto-protection, and deny rule registration
 
-**Client-Side Tests (27 tests):**
+**Client-Side Tests (32 tests):**
 - **Package Loading**: Verification that the package loads correctly on the client
 - **API Availability**: Ensures Model, CustomTypes, and SchemaHelpers are accessible
 - **Model Instantiation**: Confirms Model instances can be created on the client
 - **Protected Field Enforcement**: Comprehensive testing of `denyUntrusted()` protection:
-  - Prevents client from setting protected fields on insert
-  - Prevents client from updating protected fields
+  - Prevents client from setting protected fields on insert (via direct collection access)
+  - Prevents client from updating protected fields (via direct collection access)
+  - Prevents client from setting protected fields via `Model.insertAsync()`
+  - Prevents client from updating protected fields via `Model.updateAsync()`
   - Works with all MongoDB operators ($set, $push, $unset, $inc, etc.)
   - Auto-protects timestamp and user tracking fields from schema helpers
   - Allows operations when protected fields are omitted

@@ -12,6 +12,10 @@ export const IsInsert = new Meteor.EnvironmentVariable<boolean>();
 export const IsUpdate = new Meteor.EnvironmentVariable<boolean>();
 export const IsUpsert = new Meteor.EnvironmentVariable<boolean>();
 
+// Set to true when Model methods are adding protected field defaults as part of
+// trusted transformation (not client directly setting protected fields)
+export const IsTrustedTransform = new Meteor.EnvironmentVariable<boolean>();
+
 // Allow overriding time for testing
 let clock: () => Date;
 export function setClock(newClock: () => Date) {
