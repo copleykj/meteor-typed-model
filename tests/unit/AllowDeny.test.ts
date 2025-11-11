@@ -2,8 +2,7 @@ import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import { z } from "zod";
-import { Model } from "meteor/typed:model";
-import { CustomTypes } from "meteor/typed:model";
+import { Model, CustomTypes } from "meteor/typed:model";
 import type { MongoRecordZodType } from "../../src/generateJsonSchema";
 
 const { nonEmptyString, stringId } = CustomTypes;

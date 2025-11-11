@@ -24,11 +24,12 @@
     "baseUrl": ".",
     "paths": {
       /* Support absolute /imports/* with a leading '/' */
-      "/*": ["*"]
+      "/*": ["*"],
+      /* Map meteor package imports to local exports */
+      "meteor/typed:model": ["./exports.ts"]
     },
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "types": ["node"],
     "esModuleInterop": true,
     "preserveSymlinks": true
   },
