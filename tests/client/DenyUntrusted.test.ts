@@ -1,7 +1,4 @@
-import { Meteor } from "meteor/meteor";
 import { assert } from "chai";
-import { z } from "zod";
-import { CustomTypes } from "meteor/typed:model";
 import {
   ManualProtected,
   Timestamped,
@@ -9,10 +6,7 @@ import {
   Common,
   Nested,
   Numeric,
-  NumericSchema,
 } from "../lib/clientTestModels";
-
-const { nonEmptyString, denyUntrusted } = CustomTypes;
 
 describe("Client-side denyUntrusted protection", function () {
   // Clean up after each test to avoid interference
@@ -29,7 +23,7 @@ describe("Client-side denyUntrusted protection", function () {
           name: "Test User",
           email: "test@example.com",
           isAdmin: true, // Protected field!
-        });
+        } as any);
         assert.fail("Should have thrown untrusted-field-modification error");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -45,7 +39,7 @@ describe("Client-side denyUntrusted protection", function () {
         email: "valid@example.com",
         // isAdmin omitted - will use default (false) on server
         // role omitted - will use default ("user") on server
-      });
+      } as any);
 
       assert.isString(id);
       // Note: We don't verify default values here because client-side tests
@@ -59,7 +53,7 @@ describe("Client-side denyUntrusted protection", function () {
           email: "hacker@example.com",
           isAdmin: true, // Protected!
           role: "admin", // Protected!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -76,7 +70,7 @@ describe("Client-side denyUntrusted protection", function () {
           name: "User",
           email: "user@example.com",
           permissions: ["admin"], // Protected array!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -92,7 +86,7 @@ describe("Client-side denyUntrusted protection", function () {
             internal: true, // Protected nested field!
             score: 100,
           },
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -107,7 +101,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       // Try to update protected field
       try {
@@ -125,7 +119,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       // Update non-protected field should work
       const result = await ManualProtected.collection.updateAsync(id, {
@@ -142,7 +136,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       try {
         await ManualProtected.collection.updateAsync(id, {
@@ -160,7 +154,7 @@ describe("Client-side denyUntrusted protection", function () {
     it("prevents updating nested protected field", async function () {
       const id = await Nested.collection.insertAsync({
         name: "Test",
-      });
+      } as any);
 
       try {
         await Nested.collection.updateAsync(id, {
@@ -176,7 +170,7 @@ describe("Client-side denyUntrusted protection", function () {
     it("allows updating nested non-protected field", async function () {
       const id = await Nested.collection.insertAsync({
         name: "Test",
-      });
+      } as any);
 
       // Update non-protected nested field should work
       const result = await Nested.collection.updateAsync(id, {
@@ -195,7 +189,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       try {
         await ManualProtected.collection.updateAsync(id, {
@@ -212,7 +206,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       try {
         await ManualProtected.collection.updateAsync(id, {
@@ -229,7 +223,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test User",
         email: "test@example.com",
-      });
+      } as any);
 
       try {
         await ManualProtected.collection.updateAsync(id, {
@@ -245,7 +239,7 @@ describe("Client-side denyUntrusted protection", function () {
     it("prevents $inc on protected numeric field", async function () {
       const id = await Numeric.collection.insertAsync({
         name: "Player",
-      });
+      } as any);
 
       try {
         await Numeric.collection.updateAsync(id, {
@@ -265,7 +259,7 @@ describe("Client-side denyUntrusted protection", function () {
         await Timestamped.collection.insertAsync({
           name: "Test",
           createdAt: new Date(), // Protected by withTimestamps!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -276,7 +270,7 @@ describe("Client-side denyUntrusted protection", function () {
     it("withTimestamps: prevents updating updatedAt", async function () {
       const id = await Timestamped.collection.insertAsync({
         name: "Test",
-      });
+      } as any);
 
       try {
         await Timestamped.collection.updateAsync(id, {
@@ -294,7 +288,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await Timestamped.collection.insertAsync({
         name: "Test",
         // createdAt/updatedAt omitted - will be auto-populated on server
-      });
+      } as any);
 
       assert.isString(id);
       // Note: Server-side auto-populated fields may not sync back immediately to client
@@ -306,7 +300,7 @@ describe("Client-side denyUntrusted protection", function () {
         await UserTracked.collection.insertAsync({
           name: "Test",
           createdBy: "fake-user-id", // Protected by withUsers!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -317,7 +311,7 @@ describe("Client-side denyUntrusted protection", function () {
     it("withUsers: prevents updating updatedBy", async function () {
       const id = await UserTracked.collection.insertAsync({
         name: "Test",
-      });
+      } as any);
 
       try {
         await UserTracked.collection.updateAsync(id, {
@@ -336,7 +330,7 @@ describe("Client-side denyUntrusted protection", function () {
         await Common.collection.insertAsync({
           title: "Test",
           createdAt: new Date(), // Protected!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -347,7 +341,7 @@ describe("Client-side denyUntrusted protection", function () {
         await Common.collection.insertAsync({
           title: "Test",
           createdBy: "fake-user", // Protected!
-        });
+        } as any);
         assert.fail("Should have been denied");
       } catch (error: any) {
         assert.equal(error.error, "untrusted-field-modification");
@@ -359,7 +353,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await Common.collection.insertAsync({
         title: "Test",
         // All protected fields omitted - will be auto-populated on server
-      });
+      } as any);
 
       assert.isString(id);
       // Note: Server-side auto-populated fields may not sync back immediately to client
@@ -444,7 +438,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test",
         email: "test@example.com",
-      });
+      } as any);
 
       // Update multiple non-protected fields
       const result = await ManualProtected.collection.updateAsync(id, {
@@ -465,7 +459,7 @@ describe("Client-side denyUntrusted protection", function () {
       const id = await ManualProtected.collection.insertAsync({
         name: "Test",
         email: "test@example.com",
-      });
+      } as any);
 
       try {
         await ManualProtected.collection.updateAsync(id, {

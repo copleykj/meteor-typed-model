@@ -1,4 +1,3 @@
-import { Meteor } from "meteor/meteor";
 import { Random } from "meteor/random";
 import { assert } from "chai";
 import { z } from "zod";
@@ -123,8 +122,10 @@ describe("denyUntrusted", function () {
 
       const record = await model.findOneAsync(id);
       assert.isOk(record);
-      assert.equal(record.createdAt.toISOString(), fixedDate.toISOString());
-      assert.equal(record.updatedAt.toISOString(), fixedDate.toISOString());
+      assert.isOk(record.createdAt);
+      assert.equal((record.createdAt as Date).toISOString(), fixedDate.toISOString());
+      assert.isOk(record.updatedAt);
+      assert.equal((record.updatedAt as Date).toISOString(), fixedDate.toISOString());
 
       // Verify updatedAt is automatically updated
       const updateDate = new Date("2024-01-02T00:00:00Z");
@@ -138,7 +139,8 @@ describe("denyUntrusted", function () {
       assert.isOk(updated);
       // Note: createdAt should stay the same in normal operations
       // but is not automatically protected with denyUntrusted
-      assert.equal(updated.updatedAt.toISOString(), updateDate.toISOString());
+      assert.isOk(updated.updatedAt);
+      assert.equal((updated.updatedAt as Date).toISOString(), updateDate.toISOString());
     });
 
     it("withUsers protects createdBy (but not updatedBy)", async function () {
@@ -177,8 +179,10 @@ describe("denyUntrusted", function () {
 
       const record = await model.findOneAsync(id);
       assert.isOk(record);
-      assert.equal(record.createdAt.toISOString(), fixedDate.toISOString());
-      assert.equal(record.updatedAt.toISOString(), fixedDate.toISOString());
+      assert.isOk(record.createdAt);
+      assert.equal((record.createdAt as Date).toISOString(), fixedDate.toISOString());
+      assert.isOk(record.updatedAt);
+      assert.equal((record.updatedAt as Date).toISOString(), fixedDate.toISOString());
       // createdBy and updatedBy will be set based on Meteor.userId()
     });
   });
@@ -377,7 +381,8 @@ describe("denyUntrusted", function () {
       const updated = await model.findOneAsync(id);
       assert.isOk(updated);
       assert.equal(updated.email, "newemail@example.com");
-      assert.equal(updated.lastLogin.toISOString(), now.toISOString());
+      assert.isOk(updated.lastLogin);
+      assert.equal((updated.lastLogin as Date).toISOString(), now.toISOString());
     });
   });
 

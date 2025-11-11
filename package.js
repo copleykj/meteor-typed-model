@@ -1,4 +1,4 @@
-/* global Package */
+/* global Package, Npm */
 Package.describe({
   name: 'typed:model',
   version: '1.0.0',

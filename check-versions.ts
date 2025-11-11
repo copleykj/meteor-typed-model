@@ -1,4 +1,4 @@
-// @ts-expect-error
+// @ts-expect-error - Meteor package imports are not typed
 import { checkNpmVersions } from 'meteor/tmeasday:check-npm-versions';
 
 checkNpmVersions(

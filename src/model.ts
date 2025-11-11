@@ -11,7 +11,6 @@ import {
   IsInsert,
   IsUpdate,
   IsUpsert,
-  IsTrustedTransform,
   isDenyUntrusted,
   stringId,
 } from "./customTypes";
@@ -39,7 +38,7 @@ export type SelectorToResultType<
   >;
 
 export type FieldsOf<T> = {
-  [K in keyof T]?: 1 | 0;
+  [_K in keyof T]?: 1 | 0;
 };
 
 export type SelectedFields<T, F extends FieldsOf<T>> = {
@@ -586,7 +585,7 @@ class Model<
 
         return false;
       },
-      remove: (userId, doc) => {
+      remove: () => {
         // No protected field checks needed for remove
         return false;
       },
@@ -595,17 +594,17 @@ class Model<
     // Second deny rule: Clean and apply transforms
     // This always returns false (doesn't actually deny) but modifies the document
     this.collection.deny({
-      insert: (userId, doc) => {
+      insert: () => {
         // The document is already validated by the Model's insertAsync method
         // when called from the client, but this ensures validation happens
         // even if the collection is accessed directly
         return false;
       },
-      update: (userId, doc, fieldNames, modifier) => {
+      update: () => {
         // Same for updates
         return false;
       },
-      remove: (userId, doc) => {
+      remove: () => {
         return false;
       },
     });
@@ -653,7 +652,7 @@ class Model<
           );
         }
       },
-      remove: (userId, doc) => {
+      remove: () => {
         // No validation needed for remove
         return false;
       },

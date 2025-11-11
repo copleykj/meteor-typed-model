@@ -1,5 +1,6 @@
 /* @ts-expect-error I don't understand why, but this fixes the weird
    MongoInternals export in @types/mongo */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars, no-unused-vars
 import { MongoInternals } from "meteor/mongo";
 
 declare module "meteor/mongo" {
@@ -12,4 +13,3 @@ declare module "meteor/mongo" {
     }
   }
 }
-

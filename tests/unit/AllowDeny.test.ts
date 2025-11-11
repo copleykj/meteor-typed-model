@@ -364,7 +364,7 @@ describe("AllowDeny", function () {
       });
 
       model.allow({
-        insert: (userId, doc) => userId === "admin",
+        insert: (userId, _doc) => userId === "admin",
       });
 
       // Either rule returning true should allow the operation

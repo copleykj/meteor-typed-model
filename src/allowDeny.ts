@@ -7,7 +7,7 @@ import type { z } from "zod";
  * @param doc - The document being inserted
  * @returns true to allow/deny the operation, false otherwise
  */
-export type InsertRule<T> = (userId: string | null, doc: T) => boolean;
+export type InsertRule<T> = (_userId: string | null, _doc: T) => boolean;
 
 /**
  * Allow/Deny rule callback for update operations
@@ -18,10 +18,10 @@ export type InsertRule<T> = (userId: string | null, doc: T) => boolean;
  * @returns true to allow/deny the operation, false otherwise
  */
 export type UpdateRule<T> = (
-  userId: string | null,
-  doc: T,
-  fieldNames: string[],
-  modifier: Record<string, any>,
+  _userId: string | null,
+  _doc: T,
+  _fieldNames: string[],
+  _modifier: Record<string, any>,
 ) => boolean;
 
 /**
@@ -30,7 +30,7 @@ export type UpdateRule<T> = (
  * @param doc - The document being removed
  * @returns true to allow/deny the operation, false otherwise
  */
-export type RemoveRule<T> = (userId: string | null, doc: T) => boolean;
+export type RemoveRule<T> = (_userId: string | null, _doc: T) => boolean;
 
 /**
  * Options for allow rules
@@ -54,7 +54,7 @@ export interface AllowRules<T> {
    * Function to transform documents before passing to callbacks.
    * Overrides any transform on the Collection.
    */
-  transform?: ((doc: any) => T) | null;
+  transform?: ((_doc: any) => T) | null;
 }
 
 /**
@@ -79,7 +79,7 @@ export interface DenyRules<T> {
    * Function to transform documents before passing to callbacks.
    * Overrides any transform on the Collection.
    */
-  transform?: ((doc: any) => T) | null;
+  transform?: ((_doc: any) => T) | null;
 }
 
 /**
@@ -136,6 +136,6 @@ export function extractFieldNamesFromModifier(
  */
 export function isInsecureMode(): boolean {
   // Check if Package.insecure exists
-  // @ts-ignore - Package is a global Meteor object not defined in types
+  // @ts-expect-error - Package is a global Meteor object not defined in types
   return !!Package?.insecure;
 }

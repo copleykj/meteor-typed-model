@@ -440,10 +440,12 @@ describe("generateJsonSchema", function () {
     });
 
     it("supports TypeScript-native enums", async function () {
+      /* eslint-disable no-unused-vars */
       enum Enum {
         foo,
         bar,
       }
+      /* eslint-enable no-unused-vars */
       const schema = z.object({
         _id: z.string(),
         enum: z.nativeEnum(Enum),

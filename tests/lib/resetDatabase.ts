@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { Mongo } from "meteor/mongo";
+import { MongoInternals } from "meteor/mongo";
 
 // Track whether we're currently resetting to prevent concurrent resets
 let resetInProgress = false;
@@ -54,6 +54,11 @@ export async function resetDatabase(): Promise<void> {
   // On client, just ensure we're logged out to avoid issues with
   // mid-call authentication changes
   if (Meteor.isClient && Meteor.userId()) {
-    await Meteor.logoutAsync();
+    await new Promise<void>((resolve, reject) => {
+      Meteor.logout((error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
   }
 }

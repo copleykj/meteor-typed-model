@@ -10,15 +10,19 @@ import "./lib/clientTestModels";
 
 // Import server-side test suites
 if (Meteor.isServer) {
-  import "./unit/Model.test";
-  import "./unit/generateJsonSchema.test";
-  import "./unit/validateSchema.test";
-  import "./unit/AllowDeny.test";
-  import "./unit/DenyUntrusted.test";
+  (async () => {
+    await import("./unit/Model.test");
+    await import("./unit/generateJsonSchema.test");
+    await import("./unit/validateSchema.test");
+    await import("./unit/AllowDeny.test");
+    await import("./unit/DenyUntrusted.test");
+  })();
 }
 
 // Import client-side test suites
 if (Meteor.isClient) {
-  import "./client/basic.test";
-  import "./client/DenyUntrusted.test";
+  (async () => {
+    await import("./client/basic.test");
+    await import("./client/DenyUntrusted.test");
+  })();
 }
