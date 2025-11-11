@@ -10,9 +10,10 @@ A Zod validated, type-safe wrapper around Meteor Mongo Collections with automati
 - **Smart Updates**: MongoDB update operators with schema validation
 - **Field Projections**: Return types automatically narrow based on field selection
 - **Client Security**: Automatic validation deny rules with Meteor's allow/deny system
+- **Protected Fields**: `denyUntrusted()` helper prevents privilege escalation attacks
 - **Custom Types**: Pre-built Zod types for common patterns
 - **Schema Helpers**: Easy composition with `withTimestamps`, `withUsers`, and `withCommon`
-- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with comprehensive test coverage
+- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with **111 tests** (84 server + 27 client)
 
 ## Installation
 
@@ -303,6 +304,63 @@ PostModel.deny({
 });
 ```
 
+### Protecting Sensitive Fields with `denyUntrusted`
+
+For fields that should **never** be modified by client code (like `isAdmin`, `role`, or system metadata), use the `denyUntrusted()` helper instead of writing custom deny rules:
+
+```typescript
+import { CustomTypes } from 'meteor/typed:model';
+const { denyUntrusted, nonEmptyString } = CustomTypes;
+
+const UserSchema = z.object({
+  username: nonEmptyString,
+  email: nonEmptyString,
+
+  // These fields are automatically protected from ALL client modifications
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+  role: denyUntrusted(z.enum(['user', 'moderator', 'admin']).default('user')),
+  permissions: denyUntrusted(z.array(nonEmptyString).default([])),
+});
+
+const UserModel = new Model({ name: 'users', schema: UserSchema });
+
+// CLIENT: ❌ This will be denied
+try {
+  await UserModel.collection.insertAsync({
+    username: 'hacker',
+    email: 'hacker@example.com',
+    isAdmin: true, // Attempt to escalate privileges - DENIED!
+  });
+} catch (error) {
+  // Meteor.Error: "Cannot modify protected field 'isAdmin' from client code"
+}
+
+// CLIENT: ✅ This succeeds (protected field omitted)
+await UserModel.collection.insertAsync({
+  username: 'user',
+  email: 'user@example.com',
+  // isAdmin omitted - will use default (false)
+});
+
+// SERVER: ✅ Server can set protected fields freely
+if (Meteor.isServer) {
+  await UserModel.insertAsync({
+    username: 'admin',
+    email: 'admin@example.com',
+    isAdmin: true, // Allowed on server
+    role: 'admin',
+  });
+}
+```
+
+**Benefits of `denyUntrusted`:**
+- **Schema-level protection**: Defined where your data structure is defined
+- **Works everywhere**: Protects even if collection is accessed directly
+- **Defense in depth**: Uses Meteor's `deny()` system under the hood
+- **Auto-protected helpers**: `withCommon`, `withTimestamps`, and `withUsers` automatically protect their fields
+
+See [Custom Types - denyUntrusted](docs/CUSTOM_TYPES.md#denyuntrusted) for detailed documentation and examples.
+
 ### Rule Evaluation Order
 
 Meteor evaluates security rules in a specific order:
@@ -460,9 +518,9 @@ sudo npx playwright install-deps
 
 ### Test Coverage
 
-The test suite includes **65 comprehensive tests** (61 server-side + 4 client-side):
+The test suite includes **111 comprehensive tests** (84 server-side + 27 client-side):
 
-**Server-Side Tests (61 tests):**
+**Server-Side Tests (84 tests):**
 - **Model CRUD Operations**: Insert, update, upsert, and find operations with schema validation
 - **Custom Types**: Auto-populated fields like `stringId`, `createdTimestamp`, `updatedTimestamp`, `createdUser`, and `updatedUser`
 - **Schema Validation**: Runtime validation with Zod and compile-time type safety
@@ -471,11 +529,19 @@ The test suite includes **65 comprehensive tests** (61 server-side + 4 client-si
 - **JSON Schema Generation**: MongoDB JSON Schema generation from Zod schemas
 - **Type Inference**: Compile-time tests ensuring correct TypeScript type inference
 - **Allow/Deny Security**: Auto-applied validation rules, custom allow/deny rules, rule evaluation order, server-only bypassSchema enforcement, error formatting, and integration with Model methods
+- **Protected Fields**: `denyUntrusted()` marker detection, field extraction, schema helper auto-protection, and deny rule registration
 
-**Client-Side Tests (4 tests):**
+**Client-Side Tests (27 tests):**
 - **Package Loading**: Verification that the package loads correctly on the client
 - **API Availability**: Ensures Model, CustomTypes, and SchemaHelpers are accessible
 - **Model Instantiation**: Confirms Model instances can be created on the client
+- **Protected Field Enforcement**: Comprehensive testing of `denyUntrusted()` protection:
+  - Prevents client from setting protected fields on insert
+  - Prevents client from updating protected fields
+  - Works with all MongoDB operators ($set, $push, $unset, $inc, etc.)
+  - Auto-protects timestamp and user tracking fields from schema helpers
+  - Allows operations when protected fields are omitted
+  - Proper error messages with field names
 
 ## Contributing
 

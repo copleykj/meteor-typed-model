@@ -1,10 +1,14 @@
 import { z } from "zod";
-import { createdTimestamp, updatedTimestamp } from "./customTypes";
+import {
+  createdTimestamp,
+  denyUntrusted,
+  updatedTimestamp,
+} from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
 
 export const TimestampFields = {
-  createdAt: createdTimestamp,
-  updatedAt: updatedTimestamp,
+  createdAt: denyUntrusted(createdTimestamp),
+  updatedAt: denyUntrusted(updatedTimestamp),
 };
 
 export default function withTimestamps<T extends MongoRecordZodType>(

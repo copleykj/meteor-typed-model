@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { createdUser, updatedUser } from "./customTypes";
+import { createdUser, denyUntrusted, updatedUser } from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
 
 export const UserFields = {
-  createdBy: createdUser,
-  updatedBy: updatedUser,
+  createdBy: denyUntrusted(createdUser),
+  updatedBy: denyUntrusted(updatedUser),
 };
 
 export default function withUsers<T extends MongoRecordZodType>(

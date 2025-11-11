@@ -106,3 +106,56 @@ export const updatedUser = foreignKey.optional().transform((v) => {
 });
 attachCustomJsonSchema(updatedUser, { bsonType: "string", pattern: Id.source });
 
+// Symbol used to mark schemas as protected from untrusted modifications
+const DENY_UNTRUSTED_MARKER = Symbol("denyUntrusted");
+
+/**
+ * Marks a Zod schema field as protected from untrusted (client) code modifications.
+ *
+ * This is similar to collection2/simple-schema's `denyUntrusted` custom validator.
+ * Fields marked with this function can only be modified by server-side code.
+ * Client attempts to set these fields will be denied via Meteor's deny() system.
+ *
+ * Behavior:
+ * - Server (trusted) code: Can set any value
+ * - Client (untrusted) code:
+ *   - Cannot set the field (operation will be denied)
+ *   - Can omit the field (will use default or auto-generated value)
+ *
+ * Protection is enforced at the Model/Collection level via Meteor's deny() rules,
+ * working even if the underlying collection is accessed directly (not through Model methods).
+ *
+ * Typical use cases:
+ * - System-managed fields (timestamps, user IDs) that should never be client-settable
+ * - Security-sensitive fields (isAdmin, role, permissions)
+ * - Audit fields that must reflect actual operation context
+ *
+ * @example
+ * ```typescript
+ * const UserSchema = z.object({
+ *   _id: stringId,
+ *   username: nonEmptyString,
+ *   isAdmin: denyUntrusted(z.boolean().default(false)),
+ *   roleId: denyUntrusted(nonEmptyString.optional()),
+ *   createdAt: denyUntrusted(createdTimestamp),
+ *   updatedAt: denyUntrusted(updatedTimestamp),
+ * });
+ * ```
+ *
+ * @param schema - Any Zod schema to protect from untrusted modifications
+ * @returns The same schema with metadata marking it as protected
+ */
+export function denyUntrusted<T extends z.ZodTypeAny>(schema: T): T {
+  // Add marker symbol to the schema for detection by Model
+  (schema as any)[DENY_UNTRUSTED_MARKER] = true;
+  return schema;
+}
+
+/**
+ * Checks if a Zod schema has been marked with denyUntrusted
+ * @internal
+ */
+export function isDenyUntrusted(schema: z.ZodTypeAny): boolean {
+  return !!(schema as any)[DENY_UNTRUSTED_MARKER];
+}
+

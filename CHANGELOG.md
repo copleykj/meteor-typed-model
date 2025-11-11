@@ -1,10 +1,52 @@
 # Typed Model Change Log
 
-## Unreleased
+## v1.0.0 (2025-11-10)
 
-- Add comprehensive documentation (API reference, Custom Types, Schema Helpers, etc.)
-- Add collection2-style client validation with automatic schema validation deny rules
-- Add comprehensive test coverage (65 tests: 61 server-side + 4 client-side)
+**🎉 First stable release!**
+
+### Security
+
+- **NEW**: Add `denyUntrusted()` helper to protect fields from client modifications
+  - Prevents privilege escalation attacks (e.g., clients setting `isAdmin: true`)
+  - Uses Meteor's `deny()` system for defense-in-depth security
+  - Works even if underlying collection is accessed directly
+  - Automatically protects timestamp and user tracking fields in schema helpers
+  - See [Custom Types - denyUntrusted](docs/CUSTOM_TYPES.md#denyuntrusted) for details
+
+### Documentation
+
+- Add comprehensive documentation suite:
+  - [API Reference](docs/API.md) - Complete Model class API
+  - [Custom Types](docs/CUSTOM_TYPES.md) - All built-in types with examples
+  - [Schema Helpers](docs/SCHEMA_HELPERS.md) - Composition patterns
+  - [Type System](docs/TYPE_SYSTEM.md) - TypeScript type inference
+  - [Best Practices](docs/BEST_PRACTICES.md) - Security, performance, patterns
+  - [Advanced Usage](docs/ADVANCED.md) - Custom types, edge cases
+  - [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
+  - [Migration Guide](docs/MIGRATION.md) - From collection2/simple-schema
+
+### Testing
+
+- Add comprehensive test coverage: **111 tests** (84 server + 27 client)
+  - Server-side unit tests for all Model operations
+  - Client-side tests for `denyUntrusted` protection (via Playwright)
+  - Schema validation and transformation tests
+  - Allow/deny rule integration tests
+  - Collection2-style automatic validation deny rules
+
+### Enhancements
+
+- Add `autopublish` package to test dependencies for client testing
+- Improve error messages for field protection violations
+- Add support for nested protected fields (dot notation)
+- Auto-protect timestamp and user fields in `withTimestamps`, `withUsers`, and `withCommon`
+
+### Internal
+
+- Add Symbol-based metadata marking for `denyUntrusted`
+- Add schema walker to extract protected field paths
+- Add MongoDB modifier field extraction for deny rule checking
+- Add shared test models for client/server testing
 
 ## v0.0.5 (2024)
 

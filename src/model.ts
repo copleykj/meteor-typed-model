@@ -7,7 +7,13 @@ import type {
   CreateIndexesOptions,
 } from "mongodb";
 import { z } from "zod";
-import { IsInsert, IsUpdate, IsUpsert, stringId } from "./customTypes";
+import {
+  IsInsert,
+  IsUpdate,
+  IsUpsert,
+  isDenyUntrusted,
+  stringId,
+} from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
 import validateSchema from "./validateSchema";
 import type { AllowRules, DenyRules } from "./allowDeny";
@@ -454,6 +460,9 @@ class Model<
   private allowRules: AllowRules<z.output<this["schema"]>>[] = [];
   private denyRules: DenyRules<z.output<this["schema"]>>[] = [];
 
+  // Fields marked with denyUntrusted() that should not be modifiable by client code
+  private protectedFields: Set<string> = new Set();
+
   constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<z.output<Schema>> }) {
     this.schema =
       schema instanceof z.ZodObject
@@ -464,6 +473,9 @@ class Model<
     this.relaxedSchema = relaxSchema(this.schema);
     this.collection = collection || new Mongo.Collection(name);
     AllModels.add(this);
+
+    // Extract fields marked with denyUntrusted() for protection
+    this.protectedFields = this.extractProtectedFields(this.schema);
 
     // Auto-apply deny rules for schema validation (collection2-style)
     // These rules only run for client-initiated operations, not server-side code
@@ -477,11 +489,78 @@ class Model<
 
   /**
    * Set up validation deny rules that run on client-side operations
-   * First deny: "clean" phase - applies transforms and defaults
-   * Second deny: validation phase - runs Zod schema validation
+   * First deny: protected fields - prevents client from modifying denyUntrusted fields
+   * Second deny: "clean" phase - applies transforms and defaults
+   * Third deny: validation phase - runs Zod schema validation
    */
   private setupValidationDenyRules(): void {
-    // First deny rule: Clean and apply transforms
+    // First deny rule: Check protected fields (denyUntrusted)
+    // This deny rule actually denies (returns true) if client tries to modify protected fields
+    this.collection.deny({
+      insert: (userId, doc) => {
+        // Check if any protected fields are being set
+        if (this.protectedFields.size === 0) return false;
+
+        for (const field of this.protectedFields) {
+          // Check top-level fields and nested fields (dot notation)
+          const fieldParts = field.split(".");
+          let value: any = doc;
+          let exists = true;
+
+          for (const part of fieldParts) {
+            if (value && typeof value === "object" && part in value) {
+              value = value[part];
+            } else {
+              exists = false;
+              break;
+            }
+          }
+
+          // If the field exists and has a value (not undefined), deny the insert
+          if (exists && value !== undefined) {
+            throw new Meteor.Error(
+              "untrusted-field-modification",
+              `Cannot modify protected field '${field}' from client code`,
+              field,
+            );
+          }
+        }
+
+        return false;
+      },
+      update: (userId, doc, fieldNames, modifier) => {
+        // Check if any protected fields are in the modifier
+        if (this.protectedFields.size === 0) return false;
+
+        const modifiedFields = this.extractModifiedFields(modifier);
+
+        for (const modifiedField of modifiedFields) {
+          // Check if this field or any parent field is protected
+          for (const protectedField of this.protectedFields) {
+            // Check exact match or if modified field is a subfield of protected field
+            if (
+              modifiedField === protectedField ||
+              modifiedField.startsWith(protectedField + ".") ||
+              protectedField.startsWith(modifiedField + ".")
+            ) {
+              throw new Meteor.Error(
+                "untrusted-field-modification",
+                `Cannot modify protected field '${protectedField}' from client code`,
+                protectedField,
+              );
+            }
+          }
+        }
+
+        return false;
+      },
+      remove: (userId, doc) => {
+        // No protected field checks needed for remove
+        return false;
+      },
+    });
+
+    // Second deny rule: Clean and apply transforms
     // This always returns false (doesn't actually deny) but modifies the document
     this.collection.deny({
       insert: (userId, doc) => {
@@ -499,7 +578,7 @@ class Model<
       },
     });
 
-    // Second deny rule: Validate against schema
+    // Third deny rule: Validate against schema
     // This throws errors if validation fails, otherwise returns false
     this.collection.deny({
       insert: (userId, doc) => {
@@ -559,6 +638,80 @@ class Model<
       update: () => true,
       remove: () => true,
     });
+  }
+
+  /**
+   * Extract field paths that have been marked with denyUntrusted()
+   * Walks the schema recursively to find all protected fields
+   * @returns Set of field paths that should be protected from client modifications
+   */
+  private extractProtectedFields(schema: z.ZodTypeAny, path: string[] = []): Set<string> {
+    const protectedFields = new Set<string>();
+
+    // Check if this schema itself is marked as protected
+    if (isDenyUntrusted(schema)) {
+      if (path.length > 0) {
+        protectedFields.add(path.join("."));
+      }
+    }
+
+    // Handle ZodObject - check each property
+    if (schema instanceof z.ZodObject) {
+      const shape = schema.shape;
+      for (const [key, value] of Object.entries(shape)) {
+        if (value instanceof z.ZodType) {
+          const fieldProtected = this.extractProtectedFields(value as z.ZodTypeAny, [...path, key]);
+          fieldProtected.forEach(field => protectedFields.add(field));
+        }
+      }
+    }
+
+    // Handle ZodIntersection - check both sides
+    if (schema._def?.typeName === "ZodIntersection") {
+      const leftProtected = this.extractProtectedFields(schema._def.left, path);
+      const rightProtected = this.extractProtectedFields(schema._def.right, path);
+      leftProtected.forEach(field => protectedFields.add(field));
+      rightProtected.forEach(field => protectedFields.add(field));
+    }
+
+    // Handle ZodOptional, ZodDefault, ZodNullable - unwrap and check inner
+    if (
+      schema._def?.typeName === "ZodOptional" ||
+      schema._def?.typeName === "ZodDefault" ||
+      schema._def?.typeName === "ZodNullable"
+    ) {
+      const innerProtected = this.extractProtectedFields(schema._def.innerType, path);
+      innerProtected.forEach(field => protectedFields.add(field));
+    }
+
+    // Handle ZodArray - check element type but don't add array elements as protected
+    // (protection applies to the whole array field)
+    if (schema._def?.typeName === "ZodArray") {
+      // Don't recurse into array elements - if the array field itself is protected,
+      // we've already caught it at the parent level
+    }
+
+    return protectedFields;
+  }
+
+  /**
+   * Extract all field names being modified from a MongoDB modifier
+   * Handles all MongoDB update operators ($set, $push, $inc, etc.)
+   * @param modifier - MongoDB modifier object
+   * @returns Set of field paths being modified
+   */
+  private extractModifiedFields(modifier: Record<string, any>): Set<string> {
+    const fields = new Set<string>();
+
+    for (const operator in modifier) {
+      if (typeof modifier[operator] === "object" && modifier[operator] !== null) {
+        for (const field in modifier[operator]) {
+          fields.add(field);
+        }
+      }
+    }
+
+    return fields;
   }
 
   async insertAsync(

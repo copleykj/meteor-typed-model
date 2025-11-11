@@ -299,10 +299,37 @@ TaskModel.allow({
 });
 ```
 
-### Deny Sensitive Field Modifications
+### Protect Sensitive Fields with `denyUntrusted`
+
+**Best approach: Use `denyUntrusted` at schema level:**
 
 ```typescript
-// ✓ Good: Protect sensitive fields
+import { CustomTypes } from 'meteor/typed:model';
+const { denyUntrusted, nonEmptyString } = CustomTypes;
+
+// ✓ Best: Protect at schema level
+const UserSchema = z.object({
+  username: nonEmptyString,
+  email: nonEmptyString,
+
+  // Security-sensitive fields automatically protected from ALL client modifications
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+  role: denyUntrusted(z.enum(['user', 'moderator', 'admin']).default('user')),
+  permissions: denyUntrusted(z.array(nonEmptyString).default([])),
+  apiKey: denyUntrusted(nonEmptyString.optional()),
+});
+
+const Users = new Model({ name: 'users', schema: UserSchema });
+
+// No additional deny rules needed - denyUntrusted handles it!
+// Client cannot set these fields in insert/update operations
+// Server code can freely modify them
+```
+
+**Alternative: Custom deny rules for conditional protection:**
+
+```typescript
+// ✓ Good: Use deny rules when protection is conditional
 TaskModel.deny({
   update: (userId, doc, fieldNames) => {
     // Prevent changing ownership
@@ -312,13 +339,29 @@ TaskModel.deny({
 
 UserModel.deny({
   update: (userId, doc, fieldNames) => {
-    // Only admins can change roles
+    // Only admins can change roles (conditional protection)
     const protectedFields = ['role', 'permissions'];
     return protectedFields.some((field) => fieldNames.includes(field))
       && !Roles.userIsInRole(userId, 'admin');
   },
 });
 ```
+
+**When to use each approach:**
+
+| Approach | Use When |
+|----------|----------|
+| `denyUntrusted` | Field should **never** be modified by client code |
+| Custom `deny()` | Protection depends on **user roles** or **other conditions** |
+
+**Common fields to protect with `denyUntrusted`:**
+- Authorization flags: `isAdmin`, `isVerified`, `isBanned`
+- Role/permission fields: `role`, `permissions`, `accessLevel`
+- System metadata: `internalId`, `flags`, `status`
+- API credentials: `apiKey`, `secretToken`
+- Audit fields: Automatically protected when using `withCommon`, `withTimestamps`, or `withUsers`
+
+**See:** [Custom Types - denyUntrusted](CUSTOM_TYPES.md#denyuntrusted) for detailed documentation.
 
 ### Use Methods for Complex Operations
 

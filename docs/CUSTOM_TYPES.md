@@ -21,6 +21,8 @@ Pre-built Zod types with automatic behavior for common database patterns.
   - [deleted](#deleted)
   - [uint8Array](#uint8array)
   - [portNumber](#portnumber)
+- [Security](#security)
+  - [denyUntrusted](#denyuntrusted)
 - [Advanced: Context Variables](#advanced-context-variables)
   - [IsInsert, IsUpdate, IsUpsert](#isinsert-isupdate-isupsert)
 - [Testing Utilities](#testing-utilities)
@@ -634,6 +636,204 @@ await ServerModel.insertAsync({
 
 ---
 
+## Security
+
+### `denyUntrusted`
+
+```typescript
+function denyUntrusted<T extends z.ZodTypeAny>(schema: T): T
+```
+
+Marks a Zod schema field as protected from untrusted (client-side) code modifications. This prevents privilege escalation attacks where clients might try to modify security-sensitive fields.
+
+**Protection Mechanism:**
+- Enforced via Meteor's `deny()` system at the collection level
+- Works even if the underlying collection is accessed directly
+- Blocks ALL client-initiated operations (via DDP)
+- Server-side code can freely modify protected fields
+
+**Behavior:**
+
+| Context | Can Modify Field? | Notes |
+|---------|------------------|-------|
+| **Server code** | ✅ Yes | Full access to all fields |
+| **Client code** | ❌ No | `Meteor.Error` thrown if field present |
+| **Client code (field omitted)** | ✅ Yes | Will use default value |
+
+**Example:**
+
+```typescript
+import { CustomTypes } from 'meteor/typed:model';
+const { denyUntrusted, nonEmptyString } = CustomTypes;
+
+const UserSchema = z.object({
+  username: nonEmptyString,
+  email: nonEmptyString,
+
+  // Security-sensitive fields protected from client modifications
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+  role: denyUntrusted(z.enum(['user', 'moderator', 'admin']).default('user')),
+  permissions: denyUntrusted(z.array(nonEmptyString).default([])),
+
+  // Optional protected fields
+  apiKey: denyUntrusted(nonEmptyString.optional()),
+  internalFlags: denyUntrusted(z.record(z.boolean()).optional()),
+});
+
+const Users = new Model({ name: 'users', schema: UserSchema });
+
+// CLIENT: ❌ This will be denied
+try {
+  await Users.collection.insertAsync({
+    username: 'hacker',
+    email: 'hacker@example.com',
+    isAdmin: true, // Attempt to make self admin
+  });
+} catch (error) {
+  // Meteor.Error: "Cannot modify protected field 'isAdmin' from client code"
+}
+
+// CLIENT: ✅ This succeeds (protected field omitted)
+await Users.collection.insertAsync({
+  username: 'user',
+  email: 'user@example.com',
+  // isAdmin omitted - will use default (false)
+});
+
+// SERVER: ✅ Server can set protected fields
+if (Meteor.isServer) {
+  await Users.insertAsync({
+    username: 'admin',
+    email: 'admin@example.com',
+    isAdmin: true, // Allowed on server
+    role: 'admin',
+    permissions: ['manage-users', 'manage-content'],
+  });
+}
+```
+
+**Works with MongoDB Operators:**
+
+All MongoDB update operators are checked when called from client code:
+
+```typescript
+// CLIENT: ❌ All of these will be denied
+await Users.collection.updateAsync(userId, {
+  $set: { isAdmin: true },          // Denied
+});
+
+await Users.collection.updateAsync(userId, {
+  $push: { permissions: 'admin' },  // Denied
+});
+
+await Users.collection.updateAsync(userId, {
+  $unset: { apiKey: '' },           // Denied
+});
+
+// SERVER: ✅ Server can use any operator on protected fields
+if (Meteor.isServer) {
+  await Users.updateAsync(userId, {
+    $set: { role: 'moderator' },
+    $push: { permissions: 'moderate-content' },
+  });
+}
+```
+
+**Auto-Protected Fields:**
+
+Schema helpers automatically protect their fields with `denyUntrusted`:
+
+```typescript
+import { SchemaHelpers } from 'meteor/typed:model';
+const { withCommon } = SchemaHelpers;
+
+// All four fields are automatically protected:
+// - createdAt, updatedAt, createdBy, updatedBy
+const TaskSchema = withCommon(z.object({
+  title: nonEmptyString,
+  description: nonEmptyString,
+}));
+
+const Tasks = new Model({ name: 'tasks', schema: TaskSchema });
+
+// CLIENT: ❌ Cannot modify any auto-managed fields
+await Tasks.collection.insertAsync({
+  title: 'Task',
+  description: 'Description',
+  createdAt: new Date('2020-01-01'), // Denied!
+  createdBy: 'fake-user-id',         // Denied!
+});
+```
+
+**Use Cases:**
+
+1. **Authorization Flags**
+   ```typescript
+   isAdmin: denyUntrusted(z.boolean().default(false))
+   isVerified: denyUntrusted(z.boolean().default(false))
+   isBanned: denyUntrusted(z.boolean().default(false))
+   ```
+
+2. **Role/Permission Fields**
+   ```typescript
+   role: denyUntrusted(z.enum(['user', 'moderator', 'admin']))
+   permissions: denyUntrusted(z.array(nonEmptyString))
+   accessLevel: denyUntrusted(z.number().int().min(0).max(10))
+   ```
+
+3. **System Metadata**
+   ```typescript
+   internalId: denyUntrusted(nonEmptyString.optional())
+   flags: denyUntrusted(z.record(z.boolean()))
+   status: denyUntrusted(z.enum(['active', 'suspended', 'deleted']))
+   ```
+
+4. **API Credentials**
+   ```typescript
+   apiKey: denyUntrusted(nonEmptyString.optional())
+   secretToken: denyUntrusted(nonEmptyString.optional())
+   webhookUrl: denyUntrusted(z.string().url().optional())
+   ```
+
+**Security Notes:**
+
+- Protection is **defense in depth** - use alongside proper allow/deny rules
+- Protected fields work with **nested paths** (e.g., `metadata.internal`)
+- Errors include the **field name** for debugging
+- Server-side code via **Meteor Methods** is trusted (treated as server context)
+- Direct server-side collection access **bypasses** deny rules (by Meteor design)
+- Client calls via **DDP always trigger** deny rules
+
+**Migration from collection2/simple-schema:**
+
+If you're migrating from collection2/simple-schema:
+
+```typescript
+// collection2/simple-schema (old)
+const UserSchema = new SimpleSchema({
+  isAdmin: {
+    type: Boolean,
+    defaultValue: false,
+    custom: SimpleSchema.denyUntrusted,
+  },
+});
+
+// typed:model (new)
+import { CustomTypes } from 'meteor/typed:model';
+const { denyUntrusted } = CustomTypes;
+
+const UserSchema = z.object({
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+});
+```
+
+**See Also:**
+- [Best Practices - Security](BEST_PRACTICES.md#security) - Additional security patterns
+- [Schema Helpers](SCHEMA_HELPERS.md) - Auto-protected timestamp and user fields
+- [Meteor Security](https://guide.meteor.com/security.html) - Official Meteor security guide
+
+---
+
 ## Advanced: Context Variables
 
 These are advanced features used internally to track the operation context. You typically won't need these unless you're building custom types with context-aware transforms.
@@ -755,6 +955,7 @@ describe('Task timestamps', () => {
 | `deleted` | Soft delete flag | No | `false` |
 | `uint8Array` | Binary data | No | - |
 | `portNumber` | Network port (1-65535) | No | - |
+| `denyUntrusted()` | Protect field from client code | No | - |
 
 ---
 

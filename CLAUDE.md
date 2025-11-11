@@ -77,6 +77,7 @@ Pre-defined Zod types with automatic behavior:
 - `allowedEmptyString` - Explicitly allows empty strings
 - `deleted` - Boolean soft-delete flag
 - `uint8Array`, `portNumber`, `snowflake` - Specialized types
+- **`denyUntrusted`** - Wrapper to prevent client-side modifications (see Security section below)
 
 **Schema Composition Helpers**
 - `withCommon` (`src/withCommon.ts`) - Adds both timestamp and user tracking fields
@@ -118,6 +119,145 @@ The package provides sophisticated type inference:
 4. **Schema Validation**: All schemas are validated on Model construction to ensure they meet package requirements (e.g., no empty strings).
 
 5. **Index Options**: Only specific MongoDB index options are supported: `unique`, `sparse`, `partialFilterExpression`, `expireAfterSeconds` (see `src/model.ts:341-346`).
+
+## Security
+
+### Client-Side Validation with `denyUntrusted`
+
+The `denyUntrusted` helper prevents untrusted (client-side) code from modifying protected fields, similar to collection2/simple-schema's `denyUntrusted` custom validator. This is essential for security-sensitive fields that should only be set by server-side code.
+
+**Implementation:** Protection is enforced via Meteor's `deny()` system, which means it works even if the underlying collection is accessed directly (not through Model methods). The deny rules are automatically registered when the Model is constructed.
+
+**Basic Usage:**
+```typescript
+import { Model, CustomTypes } from 'meteor/typed:model';
+const { denyUntrusted, stringId, nonEmptyString } = CustomTypes;
+
+const UserSchema = z.object({
+  _id: stringId,
+  username: nonEmptyString,
+  email: nonEmptyString,
+  // Security-sensitive fields protected from client modifications
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+  role: denyUntrusted(z.enum(['user', 'moderator', 'admin']).default('user')),
+  permissions: denyUntrusted(z.array(nonEmptyString).default([])),
+  // Optional protected fields
+  apiKey: denyUntrusted(nonEmptyString.optional()),
+});
+
+const Users = new Model({ name: 'users', schema: UserSchema });
+```
+
+**Behavior:**
+- **Server (trusted) code**: Can set any value for protected fields via Model methods or direct collection access
+- **Client (untrusted) code**:
+  - Cannot set protected fields (Meteor.Error thrown with code 'untrusted-field-modification')
+  - Must omit protected fields (will use default values or remain undefined)
+  - Cannot circumvent by calling collection methods directly (deny rules still apply)
+
+**Common Use Cases:**
+1. **Authorization flags**: `isAdmin`, `isVerified`, `isBanned`
+2. **Role/permission fields**: `role`, `permissions`, `accessLevel`
+3. **System metadata**: `internalId`, `flags`, `status`
+4. **Audit fields**: Custom audit fields beyond the auto-managed ones
+5. **API credentials**: `apiKey`, `secretToken`
+
+**Example - Preventing Privilege Escalation:**
+```typescript
+// Client attempts to make themselves an admin
+try {
+  await Users.insertAsync({
+    username: 'hacker',
+    email: 'hacker@example.com',
+    isAdmin: true,  // ⚠️ This will be rejected!
+  });
+} catch (error) {
+  // Error: "This field cannot be modified from untrusted code"
+}
+
+// Correct client usage - omit protected field
+await Users.insertAsync({
+  username: 'normaluser',
+  email: 'user@example.com',
+  // isAdmin omitted - will use default value (false)
+});
+
+// Server can set protected fields
+if (Meteor.isServer) {
+  await Users.insertAsync({
+    username: 'admin',
+    email: 'admin@example.com',
+    isAdmin: true,  // ✅ Allowed on server
+  });
+}
+```
+
+**Auto-Protected Fields in Schema Helpers:**
+- **`withUsers`**: Automatically protects **both** `createdBy` and `updatedBy` fields
+- **`withTimestamps`**: Automatically protects **both** `createdAt` and `updatedAt` fields
+- **`withCommon`**: Automatically protects all four fields (createdAt, updatedAt, createdBy, updatedBy)
+
+All system-managed fields are automatically wrapped with `denyUntrusted` when using schema helpers:
+```typescript
+import { SchemaHelpers, CustomTypes } from 'meteor/typed:model';
+const { withCommon } = SchemaHelpers;
+const { nonEmptyString } = CustomTypes;
+
+// All four fields are automatically protected
+const MySchema = withCommon(z.object({
+  name: nonEmptyString,
+  email: nonEmptyString,
+}));
+
+// createdAt, updatedAt, createdBy, updatedBy are all protected automatically
+const MyModel = new Model({ name: 'myCollection', schema: MySchema });
+```
+
+**MongoDB Update Operators:**
+Protected fields work with all MongoDB update operators when called from server code:
+```typescript
+// Server-side updates of protected fields
+await Users.updateAsync(userId, {
+  $set: { role: 'admin' },  // ✅ Allowed on server
+});
+
+await Users.updateAsync(userId, {
+  $push: { permissions: 'manage-users' },  // ✅ Allowed on server
+});
+
+await Users.updateAsync(userId, {
+  $unset: { apiKey: '' },  // ✅ Allowed on server
+});
+```
+
+**Technical Notes:**
+- Protection enforced via **Meteor's `deny()` system**
+- Deny rules automatically registered in Model constructor
+- Works even if collection is accessed directly (not through Model methods)
+- Field paths extracted by walking Zod schema during Model construction
+- Supports nested field paths (e.g., `metadata.internalFlag`)
+- Handles all MongoDB update operators (`$set`, `$push`, `$unset`, etc.)
+- Compatible with Meteor Methods (server-side code, treated as trusted)
+- **Server-side direct calls bypass deny rules** (as designed by Meteor)
+- **Client-initiated operations (via DDP) trigger deny rules** and are blocked
+- `bypassSchema` option skips Zod validation but deny rules still apply (unless called from server)
+
+**Migration from collection2/simple-schema:**
+```typescript
+// simple-schema (old)
+const UserSchema = new SimpleSchema({
+  isAdmin: {
+    type: Boolean,
+    defaultValue: false,
+    custom: SimpleSchema.denyUntrusted,
+  },
+});
+
+// typed:model (new)
+const UserSchema = z.object({
+  isAdmin: denyUntrusted(z.boolean().default(false)),
+});
+```
 
 ## Testing
 

@@ -22,6 +22,7 @@ Package.onTest(function(api) {
   api.use('typescript');
   api.use('mongo');
   api.use('random');
+  api.use('autopublish');
   api.use('meteortesting:mocha@3.2.0');
   api.use('typed:model');
 
