@@ -15,6 +15,7 @@ import {
   stringId,
 } from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
+import generateJsonSchema from "./generateJsonSchema";
 import validateSchema from "./validateSchema";
 import type { AllowRules, DenyRules } from "./allowDeny";
 import {
@@ -33,7 +34,7 @@ export type SelectorToResultType<
   ? T & { _id: S }
   : S extends Mongo.ObjectID
   ? T & { _id: S }
-  : z.objectUtil.flatten<
+  : z.util.Flatten<
     T & { [K in keyof S & keyof T]: S[K] extends T[K] ? S[K] : never }
   >;
 
@@ -41,9 +42,26 @@ export type FieldsOf<T> = {
   [_K in keyof T]?: 1 | 0;
 };
 
+// The default field projection when none is passed: every field selected. If a
+// query method's F parameter were left to fall back to its FieldsOf constraint
+// (whose values are all `1 | 0 | undefined`), every field in the result type
+// would resolve to `never`, silently destroying type safety on unprojected
+// queries.
+export type AllFieldsOf<T> = {
+  [_K in keyof T]: 1;
+};
+
 export type SelectedFields<T, F extends FieldsOf<T>> = {
   [K in keyof F]: F[K] extends 1 ? K extends keyof T ? T[K] : never : never;
 };
+
+// The discriminated union of zod 4 internal defs. Switching on `def.type`
+// narrows to the specific def shape.
+type AnyDef = z.core.$ZodTypes["_zod"]["def"];
+
+function defOf(schema: z.core.$ZodType): AnyDef {
+  return (schema as z.core.$ZodTypes)._zod.def;
+}
 
 // Walk the schema and adjust the schema to match an update operation (not the
 // top-level, but the individual objects on $set or similar). This means
@@ -55,18 +73,18 @@ export type SelectedFields<T, F extends FieldsOf<T>> = {
 //
 // It's OK if any of these would accept _more_ than Mongo would accept, so long
 // as they accept _at least_ what Mongo would accept.
-export function relaxSchema(schema: z.ZodFirstPartySchemaTypes): z.ZodTypeAny {
-  const { _def: def } = schema;
-  switch (def.typeName) {
-    case z.ZodFirstPartyTypeKind.ZodObject: {
-      const newShape: any = {};
-      for (const [key, fieldSchemaUnknown] of Object.entries(def.shape())) {
-        const fieldSchema = fieldSchemaUnknown as z.ZodTypeAny;
-        newShape[key] = relaxSchema(fieldSchema);
+export function relaxSchema(schema: z.ZodType): z.ZodType {
+  const def = defOf(schema);
+  switch (def.type) {
+    case "object": {
+      const newShape: Record<string, z.ZodType> = {};
+      for (const [key, fieldSchema] of Object.entries(def.shape)) {
+        newShape[key] = relaxSchema(fieldSchema as z.ZodType);
       }
-      return z.object(newShape).passthrough().optional();
+      return z.looseObject(newShape).optional();
     }
-    case z.ZodFirstPartyTypeKind.ZodArray:
+    case "array": {
+      const element = def.element as z.ZodType;
       // Depending on how we're manipulating the array, it can either be:
       // - A record of stringified numbers to elements (not actually, but this
       //   is what we end up with from getSchemaForField)
@@ -78,50 +96,64 @@ export function relaxSchema(schema: z.ZodFirstPartySchemaTypes): z.ZodTypeAny {
       // matches)
       return z
         .union([
-          z.record(z.coerce.number(), relaxSchema(def.type)).optional(),
+          z.record(z.coerce.number(), relaxSchema(element)).optional(),
           z
-            .object({ $each: z.array(relaxSchema(def.type)) })
-            .passthrough()
+            .looseObject({ $each: z.array(relaxSchema(element)) })
             .optional(),
-          relaxSchema(def.type).optional(),
-          z.array(relaxSchema(def.type)).optional(),
+          relaxSchema(element).optional(),
+          z.array(relaxSchema(element)).optional(),
         ])
         .optional();
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-      return z.union(def.options.map(relaxSchema)).optional();
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion:
-      return z.union(def.options.map(relaxSchema)).optional();
-    case z.ZodFirstPartyTypeKind.ZodIntersection:
+    }
+    // Covers both z.union and z.discriminatedUnion
+    case "union":
       return z
-        .intersection(relaxSchema(def.left), relaxSchema(def.right))
+        .union(def.options.map((option) => relaxSchema(option as z.ZodType)))
         .optional();
-    case z.ZodFirstPartyTypeKind.ZodTuple:
-      return z.tuple(def.items.map(relaxSchema)).optional();
-    case z.ZodFirstPartyTypeKind.ZodRecord:
-      return z.record(def.keyType, relaxSchema(def.valueType)).optional();
-    case z.ZodFirstPartyTypeKind.ZodDefault: {
-      const { defaultValue, innerType } = def;
-      return relaxSchema(innerType).transform(
-        (v: z.output<typeof innerType>) => {
-          if (v !== undefined) return v;
-          if (
-            IsInsert.getOrNullIfOutsideFiber() ||
-            IsUpsert.getOrNullIfOutsideFiber()
-          ) {
-            return defaultValue();
-          }
-          return undefined;
-        },
-      );
+    case "intersection":
+      return z
+        .intersection(
+          relaxSchema(def.left as z.ZodType),
+          relaxSchema(def.right as z.ZodType),
+        )
+        .optional();
+    case "tuple":
+      return z
+        .tuple(
+          def.items.map((item) => relaxSchema(item as z.ZodType)) as [
+            z.ZodType,
+            ...z.ZodType[],
+          ],
+        )
+        .optional();
+    case "record":
+      return z
+        .record(
+          def.keyType as z.ZodType<string, string>,
+          relaxSchema(def.valueType as z.ZodType),
+        )
+        .optional();
+    case "default": {
+      const { innerType } = def;
+      return relaxSchema(innerType as z.ZodType).transform((v: unknown) => {
+        if (v !== undefined) return v;
+        if (
+          IsInsert.getOrNullIfOutsideFiber() ||
+          IsUpsert.getOrNullIfOutsideFiber()
+        ) {
+          // In zod 4, defaultValue on the def is re-evaluated per access, so
+          // function defaults (e.g. timestamp clocks) stay fresh
+          return def.defaultValue;
+        }
+        return undefined;
+      });
     }
     default:
-      return schema.isOptional() ? schema : schema.optional();
+      return schema.safeParse(undefined).success ? schema : schema.optional();
   }
 }
 
-export function flattenSchemas<Schemas extends z.ZodTypeAny[]>(
-  schemas: Schemas,
-): z.ZodTypeAny {
+export function flattenSchemas(schemas: z.ZodType[]): z.ZodType {
   const [first, second, ...rest] = schemas.filter(
     (s) => !(s instanceof z.ZodNever),
   );
@@ -136,63 +168,63 @@ export function flattenSchemas<Schemas extends z.ZodTypeAny[]>(
   return z.union([first, second, ...rest]);
 }
 
-export function getSchemaForField<Schema extends z.ZodTypeAny>(
-  schema: Schema,
+export function getSchemaForField(
+  schema: z.ZodType,
   field: string,
-): z.ZodTypeAny {
-  const { _def: def } = schema;
-  switch (def.typeName) {
-    case z.ZodFirstPartyTypeKind.ZodObject:
-      if (field in def.shape()) {
-        return def.shape()[field];
+): z.ZodType {
+  const def = defOf(schema);
+  switch (def.type) {
+    case "object":
+      if (field in def.shape) {
+        return def.shape[field] as z.ZodType;
       }
       return z.never();
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion:
+    // Covers both z.union and z.discriminatedUnion
+    case "union":
       return flattenSchemas(
-        def.options.flatMap(<T extends z.ZodTypeAny>(option: T) => {
-          return getSchemaForField(option, field);
+        def.options.flatMap((option) => {
+          return getSchemaForField(option as z.ZodType, field);
         }),
       );
-    case z.ZodFirstPartyTypeKind.ZodIntersection:
+    case "intersection":
       return flattenSchemas(
-        [def.left, def.right].flatMap(<T extends z.ZodTypeAny>(option: T) => {
-          return getSchemaForField(option, field);
+        [def.left, def.right].flatMap((option) => {
+          return getSchemaForField(option as z.ZodType, field);
         }),
       );
-    case z.ZodFirstPartyTypeKind.ZodTuple: {
+    case "tuple": {
       let index;
       try {
         index = parseInt(field, 10);
       } catch (e) {
         return z.never();
       }
-      return def.items[index] ?? z.never();
+      return (def.items[index] as z.ZodType) ?? z.never();
     }
-    case z.ZodFirstPartyTypeKind.ZodArray: {
+    case "array": {
       try {
         parseInt(field, 10);
         // if the field is a number, it's a valid array index
-        return def.type;
+        return def.element as z.ZodType;
       } catch (e) {
         return z.never();
       }
     }
-    case z.ZodFirstPartyTypeKind.ZodRecord:
-      if (def.keyType.safeParse(field).success) {
-        return def.valueType;
+    case "record":
+      if ((def.keyType as z.ZodType).safeParse(field).success) {
+        return def.valueType as z.ZodType;
       } else {
         return z.never();
       }
-    case z.ZodFirstPartyTypeKind.ZodOptional:
-      return getSchemaForField(def.innerType, field);
+    case "optional":
+      return getSchemaForField(def.innerType as z.ZodType, field);
     default:
-      throw new Error(`Unable to traverse schema type ${def.typeName}`);
+      throw new Error(`Unable to traverse schema type ${def.type}`);
   }
 }
 
 export async function parseMongoOperationAsync(
-  relaxedSchema: z.ZodTypeAny,
+  relaxedSchema: z.ZodType,
   operation: Record<string, any>,
   parsed: Record<string, any> = {},
   pathParts: string[] = [],
@@ -216,8 +248,9 @@ export async function parseMongoOperationAsync(
     }
   }
 
-  const parsedNonDotSeparatedKeys =
-    await relaxedSchema.parseAsync(nonDotSeparatedKeys);
+  const parsedNonDotSeparatedKeys = (await relaxedSchema.parseAsync(
+    nonDotSeparatedKeys,
+  )) as Record<string, any>;
   for (const [key, value] of Object.entries(parsedNonDotSeparatedKeys)) {
     parsed[pathParts.concat(key).join(".")] = value;
   }
@@ -245,7 +278,9 @@ const modifierIsWholeDoc = <T extends Document>(
 export async function parseMongoModifierAsync<
   Schema extends MongoRecordZodType,
 >(
-  relaxedSchema: Schema,
+  // The already-relaxed version of Schema (see relaxSchema); relaxing loses
+  // the precise schema type, so this is typed independently of Schema
+  relaxedSchema: z.ZodType,
   modifier: Mongo.Modifier<z.input<Schema>>,
 ): Promise<Mongo.Modifier<z.output<Schema>>> {
   // Types should prevent passing a full document as a modifier to
@@ -440,23 +475,21 @@ export const AllModels = new Set<Model<any, any>>();
 
 class Model<
   Schema extends MongoRecordZodType,
-  IdSchema extends z.ZodTypeAny = typeof stringId,
+  IdSchema extends z.ZodType = typeof stringId,
 > {
   name: string;
 
   schema: Schema extends z.ZodObject<
-    infer Shape extends z.ZodRawShape,
-    infer UnknownKeys,
-    infer Catchall
+    infer Shape extends z.core.$ZodShape,
+    infer Config extends z.core.$ZodObjectConfig
   >
     ? z.ZodObject<
-      z.objectUtil.extendShape<Shape, { _id: IdSchema }>,
-      UnknownKeys,
-      Catchall
+      z.util.Extend<Shape, { _id: IdSchema }>,
+      Config
     >
     : z.ZodIntersection<Schema, z.ZodObject<{ _id: IdSchema }>>;
 
-  relaxedSchema: z.ZodTypeAny;
+  relaxedSchema: z.ZodType;
 
   collection: Mongo.Collection<z.output<this["schema"]>>;
 
@@ -468,7 +501,16 @@ class Model<
   // Fields marked with denyUntrusted() that should not be modifiable by client code
   private protectedFields: Set<string> = new Set();
 
-  constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<z.output<Schema>> }) {
+  // Track validator attachment promise for ensuring it completes before CRUD operations
+  private validatorAttached: Promise<void> | null = null;
+
+  // The collection parameter is deliberately Mongo.Collection<any>: wrapping an
+  // existing collection (e.g. Meteor.users) is a primary use case, and
+  // Collection's generic parameter is invariant, so no schema output type would
+  // ever be assignable from a collection typed independently of this schema
+  // (Collection<Meteor.User> vs Collection<z.output<Schema>>). The Model's own
+  // typing takes over from here.
+  constructor({ name, schema, idSchema, collection, attachValidator = false }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<any>, attachValidator?: boolean }) {
     this.schema =
       schema instanceof z.ZodObject
         ? schema.extend({ _id: idSchema ?? stringId })
@@ -476,7 +518,10 @@ class Model<
     validateSchema(this.schema);
     this.name = name;
     this.relaxedSchema = relaxSchema(this.schema);
-    this.collection = collection || new Mongo.Collection(name);
+    // The property's type is phrased in terms of this["schema"], which the
+    // constructor parameter can't reference; the two are equivalent
+    this.collection = (collection ||
+      new Mongo.Collection(name)) as Mongo.Collection<z.output<this["schema"]>>;
     AllModels.add(this);
 
     // Extract fields marked with denyUntrusted() for protection
@@ -489,6 +534,16 @@ class Model<
     // Handle insecure mode by adding permissive allow rules
     if (isInsecureMode()) {
       this.setupInsecureModeAllowRules();
+    }
+
+    // Kick off validator attachment if enabled (server-side only). Constructors
+    // can't be async, so a failure can't be thrown from here -- it is re-thrown
+    // by ensureValidatorAttached() on the first CRUD operation instead. The
+    // no-op catch marks the rejection as handled so Node doesn't treat it as an
+    // unhandled rejection while no operation is awaiting it.
+    if (Meteor.isServer && attachValidator) {
+      this.validatorAttached = this.attachValidator();
+      this.validatorAttached.catch(() => { /* surfaced via ensureValidatorAttached() */ });
     }
   }
 
@@ -676,7 +731,7 @@ class Model<
    * Walks the schema recursively to find all protected fields
    * @returns Set of field paths that should be protected from client modifications
    */
-  private extractProtectedFields(schema: z.ZodTypeAny, path: string[] = []): Set<string> {
+  private extractProtectedFields(schema: z.core.$ZodType, path: string[] = []): Set<string> {
     const protectedFields = new Set<string>();
 
     // Check if this schema itself is marked as protected
@@ -686,40 +741,46 @@ class Model<
       }
     }
 
-    // Handle ZodObject - check each property
-    if (schema instanceof z.ZodObject) {
-      const shape = schema.shape;
-      for (const [key, value] of Object.entries(shape)) {
-        if (value instanceof z.ZodType) {
-          const fieldProtected = this.extractProtectedFields(value as z.ZodTypeAny, [...path, key]);
+    const def = defOf(schema);
+    switch (def.type) {
+      // Check each property
+      case "object":
+        for (const [key, value] of Object.entries(def.shape)) {
+          const fieldProtected = this.extractProtectedFields(value, [...path, key]);
           fieldProtected.forEach(field => protectedFields.add(field));
         }
+        break;
+
+      // Check both sides
+      case "intersection": {
+        const leftProtected = this.extractProtectedFields(def.left, path);
+        const rightProtected = this.extractProtectedFields(def.right, path);
+        leftProtected.forEach(field => protectedFields.add(field));
+        rightProtected.forEach(field => protectedFields.add(field));
+        break;
       }
-    }
 
-    // Handle ZodIntersection - check both sides
-    if (schema._def?.typeName === "ZodIntersection") {
-      const leftProtected = this.extractProtectedFields(schema._def.left, path);
-      const rightProtected = this.extractProtectedFields(schema._def.right, path);
-      leftProtected.forEach(field => protectedFields.add(field));
-      rightProtected.forEach(field => protectedFields.add(field));
-    }
+      // Unwrap and check inner
+      case "optional":
+      case "default":
+      case "nullable": {
+        const innerProtected = this.extractProtectedFields(def.innerType, path);
+        innerProtected.forEach(field => protectedFields.add(field));
+        break;
+      }
 
-    // Handle ZodOptional, ZodDefault, ZodNullable - unwrap and check inner
-    if (
-      schema._def?.typeName === "ZodOptional" ||
-      schema._def?.typeName === "ZodDefault" ||
-      schema._def?.typeName === "ZodNullable"
-    ) {
-      const innerProtected = this.extractProtectedFields(schema._def.innerType, path);
-      innerProtected.forEach(field => protectedFields.add(field));
-    }
+      // Transform chains (.transform()) - the marker may be on the input side
+      case "pipe": {
+        const innerProtected = this.extractProtectedFields(def.in, path);
+        innerProtected.forEach(field => protectedFields.add(field));
+        break;
+      }
 
-    // Handle ZodArray - check element type but don't add array elements as protected
-    // (protection applies to the whole array field)
-    if (schema._def?.typeName === "ZodArray") {
-      // Don't recurse into array elements - if the array field itself is protected,
-      // we've already caught it at the parent level
+      // Don't recurse into array elements - if the array field itself is
+      // protected, we've already caught it at the parent level
+      case "array":
+      default:
+        break;
     }
 
     return protectedFields;
@@ -745,12 +806,57 @@ class Model<
     return fields;
   }
 
+  /**
+   * Ensure validator is attached before performing CRUD operations
+   * Call this at the start of all write methods to avoid race conditions
+   */
+  private async ensureValidatorAttached(): Promise<void> {
+    if (this.validatorAttached) {
+      await this.validatorAttached;
+    }
+  }
+
+  /**
+   * Attach MongoDB JSON Schema validator to the collection
+   * Handles both new collections (createCollection) and existing collections (collMod)
+   * Rejects if attachment fails; the error is surfaced by ensureValidatorAttached()
+   */
+  private async attachValidator(): Promise<void> {
+    const jsonSchema = generateJsonSchema(this.schema);
+    const validator = { $jsonSchema: jsonSchema };
+
+    try {
+      // Try to create collection with validator (for new collections)
+      await this.collection
+        .rawDatabase()
+        .createCollection(this.name, { validator });
+    } catch (e: any) {
+      // Collection already exists, use collMod to add/update validator
+      if (e.code === 48 || e.codeName === 'NamespaceExists') {
+        await this.collection
+          .rawDatabase()
+          .command({
+            collMod: this.name,
+            validator,
+            validationLevel: 'strict',  // Validate all inserts and updates
+            validationAction: 'error'   // Reject invalid documents
+          });
+      } else {
+        // Any other error: throw and halt (per user preference)
+        throw new Error(
+          `Failed to attach validator to collection ${this.name}: ${e.message || String(e)}`
+        );
+      }
+    }
+  }
+
   async insertAsync(
     doc: z.input<this["schema"]>,
     options: {
       bypassSchema?: boolean | undefined;
     } = {},
   ): Promise<z.output<IdSchema>> {
+    await this.ensureValidatorAttached();
     const { bypassSchema } = options;
     if (bypassSchema) {
       // bypassSchema is only available on the server
@@ -808,10 +914,17 @@ class Model<
       },
     );
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before insert
-      const markedDoc: any = { ...parsed, _meteortypedmodelTrusted: true };
-      return await this.collection.insertAsync(markedDoc);
+      // Add a marker to indicate this is a trusted Model method transform.
+      // Deny rules check the marker and remove it before the write reaches
+      // MongoDB, but they only run for client-initiated operations. Adding it
+      // server-side would persist it into the document, so only mark on the
+      // client.
+      const markedDoc: any = Meteor.isClient
+        ? { ...parsed, _meteortypedmodelTrusted: true }
+        : parsed;
+      return (await this.collection.insertAsync(
+        markedDoc,
+      )) as z.output<IdSchema>;
     } catch (e) {
       formatValidationError(e);
       throw e;
@@ -834,6 +947,7 @@ class Model<
       bypassSchema?: boolean | undefined;
     } = {},
   ): Promise<number> {
+    await this.ensureValidatorAttached();
     const { bypassSchema = false, ...mongoOptions } = options;
 
     // Note that Meteor's update implementation will drop options that it
@@ -862,8 +976,8 @@ class Model<
         const result = await this.collection
           .rawCollection()
           .updateOne(
-            typeof selector === "object" ? selector : { _id: selector },
-            modifier,
+            (typeof selector === "object" ? selector : { _id: selector }) as any,
+            modifier as any,
             {
               ...mongoOptions,
               bypassDocumentValidation: true,
@@ -897,14 +1011,18 @@ class Model<
       }
     }
 
-    const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
+    const parsed: Record<string, any> = await parseMongoModifierAsync(
+      this.relaxedSchema,
+      modifier,
+    );
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before update
-      const markedModifier: any = {
-        ...parsed,
-        $set: { ...parsed.$set, _meteortypedmodelTrusted: true }
-      };
+      // Only mark on the client -- see the note in insertAsync.
+      const markedModifier: any = Meteor.isClient
+        ? {
+            ...parsed,
+            $set: { ...parsed.$set, _meteortypedmodelTrusted: true }
+          }
+        : parsed;
       return await this.collection.updateAsync(selector, markedModifier, mongoOptions);
     } catch (e) {
       formatValidationError(e);
@@ -927,6 +1045,7 @@ class Model<
     numberAffected?: number | undefined;
     insertedId?: z.output<IdSchema> | undefined;
   }> {
+    await this.ensureValidatorAttached();
     // On client: Check if user is trying to modify protected fields directly
     if (Meteor.isClient && this.protectedFields.size > 0) {
       const modifiedFields = this.extractModifiedFields(modifier);
@@ -948,14 +1067,18 @@ class Model<
       }
     }
 
-    const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
+    const parsed: Record<string, any> = await parseMongoModifierAsync(
+      this.relaxedSchema,
+      modifier,
+    );
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before upsert
-      const markedModifier: any = {
-        ...parsed,
-        $setOnInsert: { ...parsed.$setOnInsert, _meteortypedmodelTrusted: true }
-      };
+      // Only mark on the client -- see the note in insertAsync.
+      const markedModifier: any = Meteor.isClient
+        ? {
+            ...parsed,
+            $setOnInsert: { ...parsed.$setOnInsert, _meteortypedmodelTrusted: true }
+          }
+        : parsed;
       return (await this.collection.upsertAsync(
         selector,
         markedModifier,
@@ -970,6 +1093,7 @@ class Model<
   async removeAsync(
     selector: Selector<z.output<this["schema"]>>,
   ): Promise<number> {
+    await this.ensureValidatorAttached();
     return this.collection.removeAsync(selector);
   }
 
@@ -979,7 +1103,9 @@ class Model<
   find<
     S extends Selector<z.output<this["schema"]>>,
     O extends Omit<Mongo.Options<z.output<this["schema"]>>, "transform">,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.find(selector ?? {}, options) as Mongo.Cursor<
       ModelResultType<z.output<this["schema"]>, S, F>
@@ -992,7 +1118,9 @@ class Model<
       Mongo.Options<z.output<this["schema"]>>,
       "limit" | "transform"
     >,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.findOne(selector ?? {}, options) as
       | ModelResultType<z.output<this["schema"]>, S, F>
@@ -1005,7 +1133,9 @@ class Model<
       Mongo.Options<z.output<this["schema"]>>,
       "limit" | "transform"
     >,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.findOneAsync(selector ?? {}, options) as Promise<
       ModelResultType<z.output<this["schema"]>, S, F> | undefined

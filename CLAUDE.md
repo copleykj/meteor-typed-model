@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Meteor package that provides a Zod-validated, type-safe wrapper around Meteor's `Mongo.Collection`. The package enables runtime validation of MongoDB documents using Zod schemas while maintaining full TypeScript type safety. Extracted from the [JollyRoger](https://github.com/deathandmayhem/jolly-roger) project by Evan Broder.
 
+**Zod version:** Requires Zod 4 (`^4.0.0`) as of v2.0.0. All schema introspection is written against zod 4 internals: walkers switch on `_zod.def.type` string discriminators (typed via `z.core.$ZodTypes`), checks live in `def.checks` with `_zod.def.check` kinds, `.transform()` chains are `ZodPipe` (`def.in`/`def.out`), and `ZodError` does not extend `Error` (see `tests/lib/assertRejectsWithZodError.ts`).
+
 ## Development Commands
 
 ### Build and Type Checking
@@ -59,11 +61,30 @@ The `relaxSchema` function converts strict Zod schemas into relaxed versions for
 - Handles all MongoDB update operators
 - De-conflicts $setOnInsert with other operators
 
-**JSON Schema Generation** (`src/generateJsonSchema.ts`)
-Converts Zod schemas to MongoDB JSON Schema format for database-level validation:
-- Supports most Zod types (objects, arrays, unions, intersections, etc.)
-- Handles custom types via `attachCustomJsonSchema`
-- Manages TypeScript intersection vs JSON Schema allOf semantics differences
+**JSON Schema Generation and Database Validation** (`src/generateJsonSchema.ts`, `src/model.ts`)
+
+The Model class can optionally attach MongoDB JSON Schema validators to collections for database-level validation:
+- **Opt-in feature:** Enable with `attachValidator: true` in Model constructor
+- Validators generated from Zod schemas via `generateJsonSchema()`
+- Attached asynchronously during Model construction (server-side only)
+- Handles both new collections (`createCollection`) and existing collections (`collMod`)
+- Provides defense-in-depth: validation at both application and database layers
+- CRUD operations automatically wait for validator attachment (no race conditions)
+
+Example usage:
+```typescript
+const Users = new Model({
+  name: 'users',
+  schema: UserSchema,
+  attachValidator: true  // Enable database-level validation
+});
+```
+
+Supported schema features:
+- All Zod types (objects, arrays, unions, intersections, etc.)
+- String validations (min, max, regex, email, UUID, URL)
+- Number validations (gt, lt, int, multipleOf)
+- Custom types via `attachCustomJsonSchema`
 
 ### Schema Helpers
 
@@ -259,6 +280,46 @@ const UserSchema = z.object({
 });
 ```
 
+## Database-Level Validation Behavior
+
+### When enabled (`attachValidator: true`)
+
+- Documents validated at **two layers**: Application (Zod) + Database (MongoDB JSON Schema)
+- Invalid documents rejected before reaching MongoDB (Zod validation runs first)
+- Additional safety net if collection accessed directly (bypassing Model methods)
+- Uses strict validation level: all inserts and updates validated
+
+### Validation Flow
+
+1. **Application layer (Zod):** Runs in Model CRUD methods (`insertAsync`, `updateAsync`, etc.)
+   - Provides detailed, user-friendly error messages
+   - Applies transforms and defaults
+   - Validates before data reaches MongoDB
+
+2. **Database layer (MongoDB JSON Schema):** Runs at MongoDB server level
+   - Enforces validation even if collection accessed directly via `rawCollection()`
+   - Catches invalid data from other sources (direct MongoDB clients, admin tools)
+   - Defense-in-depth security
+
+### Bypassing validation
+
+The `bypassSchema` option on write operations (`insertAsync`, `updateAsync`) bypasses both validation layers:
+1. Zod schema validation (application-level)
+2. MongoDB JSON Schema validation (database-level via `bypassDocumentValidation: true`)
+
+Example:
+```typescript
+// Bypass both validation layers (server-only)
+await Users.insertAsync(
+  { email: 'not-an-email' },
+  { bypassSchema: true }
+);
+```
+
+### Error handling
+
+If validator attachment fails (e.g., existing collection has invalid data or schema can't be converted to MongoDB JSON Schema), the error surfaces as a rejection from the **first CRUD operation**, not from the constructor — attachment is asynchronous and a constructor cannot await it. The rejection repeats on every subsequent operation, since all write methods await the same stored promise. Fix data or schema issues before enabling database-level validation.
+
 ## Testing
 
 ### Test Framework and Setup
@@ -286,23 +347,37 @@ TEST_BROWSER_DRIVER=playwright meteor test-packages ./ --once --driver-package m
 
 ```
 tests/
-├── main.ts                       # Test entry point (imports all test suites)
+├── server.ts                     # Server test entry point
+├── client.ts                     # Client test entry point
 ├── lib/
 │   ├── AssertTypesEqual.ts      # TypeScript type equality assertion utility
+│   ├── assertRejectsWithZodError.ts # Rejection assertion (zod 4 ZodError doesn't extend Error)
+│   ├── clientTestModels.ts      # Shared models defined on both client and server
 │   └── resetDatabase.ts         # Database cleanup helper for test isolation
 ├── unit/                         # Server-side tests
-│   ├── Model.test.ts            # Core Model CRUD and validation tests (~15KB)
-│   ├── generateJsonSchema.test.ts # JSON schema generation tests (~20KB)
-│   └── validateSchema.test.ts    # Schema validation policy tests (~1KB)
+│   ├── Model.test.ts            # Core Model CRUD and validation tests
+│   ├── generateJsonSchema.test.ts # JSON schema generation tests
+│   ├── validateSchema.test.ts    # Schema validation policy tests
+│   ├── AllowDeny.test.ts        # Allow/deny rule integration tests
+│   ├── DenyUntrusted.test.ts    # Protected field tests
+│   ├── DatabaseValidation.test.ts # attachValidator / MongoDB JSON Schema tests
+│   └── ExistingCollection.test.ts # Wrapping Meteor.users / issue #1 regression
 └── client/                       # Client-side tests
-    └── basic.test.ts            # Basic package loading and functionality tests
+    ├── basic.test.ts            # Basic package loading and functionality tests
+    └── DenyUntrusted.test.ts    # Client-side protected field enforcement
 ```
+
+**Entry points must use static imports.** `package.js` registers a separate
+`api.mainModule` per architecture. Suites are pulled in with static `import`
+statements rather than dynamic `import()`, because on the client a dynamic
+import is fetched over DDP and does not resolve until after the test driver has
+already run — which silently yields zero registered tests.
 
 ### Test Coverage
 
-The package includes **49 comprehensive tests**: 45 server-side tests and 4 client-side tests, all passing.
+The package includes **144 tests**: 112 server-side and 32 client-side, all passing.
 
-#### Server-Side Tests (45 tests)
+#### Server-Side Tests (112 tests)
 
 **Model.test.ts** (`tests/unit/Model.test.ts`) - 17 tests
 - `bypassSchema` option testing for insert and update operations

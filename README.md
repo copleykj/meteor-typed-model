@@ -11,9 +11,10 @@ A Zod validated, type-safe wrapper around Meteor Mongo Collections with automati
 - **Field Projections**: Return types automatically narrow based on field selection
 - **Client Security**: Automatic validation deny rules with Meteor's allow/deny system
 - **Protected Fields**: `denyUntrusted()` helper prevents privilege escalation attacks
+- **Database Validation**: Opt-in `attachValidator` generates MongoDB JSON Schema validators from your Zod schema
 - **Custom Types**: Pre-built Zod types for common patterns
 - **Schema Helpers**: Easy composition with `withTimestamps`, `withUsers`, and `withCommon`
-- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with **116 tests** (84 server + 32 client)
+- **Production Ready**: Extracted from [JollyRoger](https://github.com/deathandmayhem/jolly-roger) with **144 tests** (112 server + 32 client)
 
 ## Installation
 
@@ -23,6 +24,8 @@ Install `typed:model` and `zod`:
 meteor add typed:model
 meteor npm install zod
 ```
+
+> Version 2.x of this package requires **Zod 4** (`^4.0.0`). If you are on Zod 3, stay on `typed:model@1.x`.
 
 ## Quick Start
 
@@ -168,16 +171,23 @@ See [Client-Side Security](#client-side-security-with-allowdeny-rules) below for
 You can wrap existing Meteor collections like `Meteor.users`:
 
 ```typescript
-import { Model } from 'meteor/typed:model';
+import { Model, CustomTypes } from 'meteor/typed:model';
 import { z } from 'zod';
 
+const { nonEmptyString } = CustomTypes;
+
 const UserSchema = z.object({
-  username: z.string().optional(),
+  // Note: use nonEmptyString rather than z.string() - string fields must not
+  // accept empty strings (see Important Constraints)
+  username: nonEmptyString.optional(),
   emails: z.array(z.object({
     address: z.string().email(),
     verified: z.boolean(),
   })).optional(),
-  // ... define schema to match Meteor's user structure
+  createdAt: z.date().optional(),
+  profile: z.record(z.string(), z.unknown()).optional(),
+  services: z.record(z.string(), z.unknown()).optional(),
+  // ... extend to match your user structure
 });
 
 const UserModel = new Model({
@@ -404,6 +414,33 @@ await PostModel.collection.insertAsync({ title: 'Test', content: 'Content', auth
 
 This means you can safely use the underlying collection methods when needed without bypassing security.
 
+## Database-Level Validation
+
+Allow/deny rules only cover writes that go through Meteor. To also enforce your schema inside MongoDB itself, opt in with `attachValidator: true`:
+
+```typescript
+const PostModel = new Model({
+  name: 'posts',
+  schema: PostSchema,
+  attachValidator: true,
+});
+```
+
+The Zod schema is converted to a MongoDB JSON Schema validator and attached to the collection. New collections get it via `createCollection`; existing ones are updated with `collMod`. Documents are then validated at two layers:
+
+1. **Application (Zod)** - runs inside Model methods, applies transforms and defaults, and produces detailed error messages.
+2. **Database (MongoDB JSON Schema)** - enforced by the MongoDB server, so it also catches writes from `rawCollection()`, other services, and admin tools.
+
+`bypassSchema` bypasses both layers, passing `bypassDocumentValidation: true` to MongoDB.
+
+A few things worth knowing:
+
+- The option is **server-only**; it is ignored on the client.
+- Attachment is asynchronous. All write methods await it internally, so there is no race, but a failure (an unconvertible schema, or existing documents that violate it) surfaces as a rejection from the **first CRUD operation**, not from the constructor — a constructor cannot await.
+- Validation uses `validationLevel: 'strict'` and `validationAction: 'error'`.
+
+See **[API Reference](docs/API.md)** for the full option list.
+
 ### Insecure Mode
 
 When the `insecure` package is active (default for new Meteor projects), the package automatically adds permissive allow rules to prevent accidentally locking down your collection during development:
@@ -518,9 +555,9 @@ sudo npx playwright install-deps
 
 ### Test Coverage
 
-The test suite includes **116 comprehensive tests** (84 server-side + 32 client-side):
+The test suite includes **144 comprehensive tests** (112 server-side + 32 client-side):
 
-**Server-Side Tests (84 tests):**
+**Server-Side Tests (112 tests):**
 - **Model CRUD Operations**: Insert, update, upsert, and find operations with schema validation
 - **Custom Types**: Auto-populated fields like `stringId`, `createdTimestamp`, `updatedTimestamp`, `createdUser`, and `updatedUser`
 - **Schema Validation**: Runtime validation with Zod and compile-time type safety
@@ -530,6 +567,7 @@ The test suite includes **116 comprehensive tests** (84 server-side + 32 client-
 - **Type Inference**: Compile-time tests ensuring correct TypeScript type inference
 - **Allow/Deny Security**: Auto-applied validation rules, custom allow/deny rules, rule evaluation order, server-only bypassSchema enforcement, error formatting, and integration with Model methods
 - **Protected Fields**: `denyUntrusted()` marker detection, field extraction, schema helper auto-protection, and deny rule registration
+- **Database-Level Validation**: `attachValidator` opt-in behavior, `createCollection`/`collMod` attachment paths, two-layer validation, `bypassSchema`, and attachment-failure handling
 
 **Client-Side Tests (32 tests):**
 - **Package Loading**: Verification that the package loads correctly on the client

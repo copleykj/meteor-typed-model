@@ -484,7 +484,7 @@ const StatusSchema = withTimestamps(
 // Literal type
 const ConfigSchema = withUsers(
   z.object({
-    settings: z.record(z.unknown()),
+    settings: z.record(z.string(), z.unknown()),
   })
 );
 

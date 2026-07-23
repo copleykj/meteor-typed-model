@@ -327,10 +327,23 @@ describe("generateJsonSchema", function () {
       );
     });
 
-    it("rejects unsupported checks", function () {
+    it("supports pattern-backed format checks like startsWith", function () {
+      // In zod 4, checks like .startsWith() carry a regex pattern, so they can
+      // be represented in MongoDB JSON Schema
       const schema = z.object({
         _id: z.string(),
         string: z.string().startsWith("a").optional(),
+      });
+      const jsonSchema = generateJsonSchema(schema);
+      assert.property(jsonSchema.properties?.string, "pattern");
+    });
+
+    it("rejects unsupported checks", function () {
+      const schema = z.object({
+        _id: z.string(),
+        // .trim() is an overwrite (transform) check with no pattern - not
+        // representable in MongoDB JSON Schema
+        string: z.string().trim().optional(),
       });
       assert.throws(
         () => generateJsonSchema(schema),
@@ -412,9 +425,11 @@ describe("generateJsonSchema", function () {
     });
 
     it("rejects unsupported checks", function () {
+      // In zod 4, .finite() is a no-op (infinity is always rejected), so use a
+      // custom refinement as the unrepresentable check
       const schema = z.object({
         _id: z.string(),
-        number: z.number().finite(),
+        number: z.number().refine((n) => n !== 42),
       });
       assert.throws(
         () => generateJsonSchema(schema),

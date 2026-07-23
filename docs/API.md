@@ -27,7 +27,8 @@ new Model<T extends MongoRecordZodType, I extends z.ZodTypeAny = typeof stringId
   name: string,
   schema: T,
   idSchema?: I,
-  collection?: Mongo.Collection<any>
+  collection?: Mongo.Collection<any>,
+  attachValidator?: boolean
 })
 ```
 
@@ -45,6 +46,7 @@ Creates a new Model instance.
 | `schema` | `T extends MongoRecordZodType` | Yes | Zod schema for document validation |
 | `idSchema` | `I extends z.ZodTypeAny` | No | Zod schema for the `_id` field (defaults to `stringId`) |
 | `collection` | `Mongo.Collection<any>` | No | Existing collection to wrap (creates new if not provided) |
+| `attachValidator` | `boolean` | No | Attach a MongoDB JSON Schema validator to the collection (default `false`, server-only) |
 
 **Example:**
 

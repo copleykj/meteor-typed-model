@@ -55,9 +55,8 @@ export const foreignKey = z.string().regex(Id);
 export const snowflake = z.string().regex(/^[0-9]+$/);
 
 // It would be nice if we could encode this in generateJsonSchema instead of
-// requiring a custom type, but z.instanceof just returns a generic ZodType
-// rather than something we can easily introspect (like one of the
-// ZodFirstPartySchemaTypes).
+// requiring a custom type, but z.instanceof just returns an opaque ZodCustom
+// whose predicate we can't introspect.
 export const uint8Array = z.instanceof(Uint8Array);
 attachCustomJsonSchema(uint8Array, { bsonType: "binData" });
 
@@ -149,7 +148,7 @@ const DENY_UNTRUSTED_MARKER = Symbol("denyUntrusted");
  * @param schema - Any Zod schema to protect from untrusted modifications
  * @returns The same schema with metadata marking it as protected
  */
-export function denyUntrusted<T extends z.ZodTypeAny>(schema: T): T {
+export function denyUntrusted<T extends z.ZodType>(schema: T): T {
   // Add marker symbol to the schema for detection by Model
   (schema as any)[DENY_UNTRUSTED_MARKER] = true;
   return schema;
@@ -159,7 +158,7 @@ export function denyUntrusted<T extends z.ZodTypeAny>(schema: T): T {
  * Checks if a Zod schema has been marked with denyUntrusted
  * @internal
  */
-export function isDenyUntrusted(schema: z.ZodTypeAny): boolean {
+export function isDenyUntrusted(schema: z.core.$ZodType): boolean {
   return !!(schema as any)[DENY_UNTRUSTED_MARKER];
 }
 

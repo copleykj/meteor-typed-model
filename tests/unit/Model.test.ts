@@ -8,9 +8,10 @@ import {
   parseMongoOperationAsync,
   relaxSchema,
 } from "meteor/typed:model";
-import { CustomTypes } from "meteor/typed:model";
+import { CustomTypes, SchemaHelpers } from "meteor/typed:model";
 import type { MongoRecordZodType } from "../../src/generateJsonSchema";
 import type { AssertTypesEqual } from "../lib/AssertTypesEqual";
+import assertRejectsWithZodError from "../lib/assertRejectsWithZodError";
 
 const {
   createdTimestamp,
@@ -48,7 +49,7 @@ describe("Model", function () {
       const model = await createTestModel(schema);
 
       // Make sure the schema is validated by zod...
-      await assert.isRejected(model.insertAsync({} as any), z.ZodError);
+      await assertRejectsWithZodError(model.insertAsync({} as any));
       // ...and mongo (if JSON schema validation is enabled)
       // Note: JSON schema validation may not be set up in all test environments
 
@@ -432,6 +433,27 @@ describe("Model", function () {
         > = true;
         assert.isTrue(insertTypeTest);
       });
+
+      // Regression coverage for the zod 4 typing collapse reported on the
+      // forums: with zod 4 installed against the zod 3-targeting v1.x types,
+      // the schema conditional types resolved to `any` and insertAsync
+      // accepted anything. These assertions fail to compile if doc is `any`.
+      it("types the doc parameter from the schema", function () {
+        type InsertDoc = Parameters<typeof model.insertAsync>[0];
+        // createdAt/updatedAt are auto-populated, so only string/number are
+        // required on the input side
+        const okDoc: InsertDoc = { string: "a", number: 1 };
+        assert.isOk(okDoc);
+        // @ts-expect-error - a wrong field type must be rejected
+        const badTypeDoc: InsertDoc = { string: "a", number: "1" };
+        assert.isOk(badTypeDoc);
+        // @ts-expect-error - missing required fields must be rejected
+        const missingFieldDoc: InsertDoc = { string: "a" };
+        assert.isOk(missingFieldDoc);
+        // @ts-expect-error - unknown fields must be rejected
+        const extraFieldDoc: InsertDoc = { string: "a", number: 1, nope: true };
+        assert.isOk(extraFieldDoc);
+      });
     });
 
     describe("updateAsync", function () {
@@ -440,6 +462,109 @@ describe("Model", function () {
           $set: { string: "foo" },
         };
         assert.isOk(modifier);
+      });
+
+      it("returns a promise of the number of affected documents", function () {
+        const updateTypeTest: AssertTypesEqual<
+          ReturnType<typeof model.updateAsync>,
+          Promise<number>
+        > = true;
+        assert.isTrue(updateTypeTest);
+      });
+    });
+
+    describe("upsertAsync", function () {
+      it("returns a promise of the upsert result", function () {
+        const upsertTypeTest: AssertTypesEqual<
+          ReturnType<typeof model.upsertAsync>,
+          Promise<{
+            numberAffected?: number | undefined;
+            insertedId?: string | undefined;
+          }>
+        > = true;
+        assert.isTrue(upsertTypeTest);
+      });
+    });
+
+    describe("query result types", function () {
+      type ExpectedDoc = {
+        _id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        string: string;
+        number: number;
+      };
+
+      it("findOneAsync returns the full document type without a projection", async function () {
+        const id: string = "missing";
+        const result = await model.findOneAsync(id);
+        const typeTest: AssertTypesEqual<
+          typeof result,
+          ExpectedDoc | undefined
+        > = true;
+        assert.isTrue(typeTest);
+        assert.isUndefined(result);
+      });
+
+      it("find().fetchAsync() returns the full document type without a projection", async function () {
+        const results = await model.find({ number: 1 }).fetchAsync();
+        const typeTest: AssertTypesEqual<typeof results, ExpectedDoc[]> = true;
+        assert.isTrue(typeTest);
+        assert.isArray(results);
+      });
+
+      it("field projections narrow the result type", async function () {
+        const id: string = "missing";
+        const result = await model.findOneAsync(id, {
+          fields: { string: 1, number: 1 },
+        });
+        const typeTest: AssertTypesEqual<
+          typeof result,
+          { string: string; number: number } | undefined
+        > = true;
+        assert.isTrue(typeTest);
+        assert.isUndefined(result);
+      });
+    });
+
+    describe("withCommon models", function () {
+      const commonSchema = SchemaHelpers.withCommon(
+        z.object({ name: nonEmptyString }),
+      );
+      let commonModel: Model<typeof commonSchema, typeof stringId>;
+      this.beforeAll(async function () {
+        commonModel = await createTestModel(commonSchema);
+      });
+
+      it("has the correct output types for system-managed fields", function () {
+        const typeTest: AssertTypesEqual<
+          ModelType<typeof commonModel>,
+          {
+            _id: string;
+            name: string;
+            createdAt: Date;
+            updatedAt: Date;
+            createdBy: string;
+            updatedBy: string | undefined;
+          }
+        > = true;
+        assert.isTrue(typeTest);
+      });
+
+      it("allows omitting system-managed fields on insert", function () {
+        // Compile-time check: system fields are optional on the input side
+        const input: z.input<(typeof commonModel)["schema"]> = { name: "x" };
+        assert.isOk(input);
+      });
+
+      it("types insertAsync's doc parameter from the withCommon schema", function () {
+        type InsertDoc = Parameters<typeof commonModel.insertAsync>[0];
+        const okDoc: InsertDoc = { name: "x" };
+        assert.isOk(okDoc);
+        // @ts-expect-error - a wrong field type must be rejected (fails if the
+        // withCommon result type ever collapses to `any` again)
+        const badDoc: InsertDoc = { name: 123 };
+        assert.isOk(badDoc);
       });
     });
 

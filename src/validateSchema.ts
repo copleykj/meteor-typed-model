@@ -1,68 +1,86 @@
 import { z } from "zod";
 import { allowedEmptyString } from "./customTypes";
 
-export default function validateSchema<T extends z.ZodFirstPartySchemaTypes>(
-  schema: T,
+// The discriminated union of zod 4 internal defs. Switching on `def.type`
+// narrows to the specific def shape.
+type AnyDef = z.core.$ZodTypes["_zod"]["def"];
+
+export default function validateSchema(
+  schema: z.core.$ZodType,
   path: string[] = [],
 ) {
-  const { _def: def } = schema;
+  const def = (schema as z.core.$ZodTypes)._zod.def as AnyDef;
 
-  switch (def.typeName) {
-    case z.ZodFirstPartyTypeKind.ZodObject:
-      Object.entries(def.shape()).forEach(([key, field]) =>
-        validateSchema(field as z.ZodTypeAny, [...path, key]),
+  switch (def.type) {
+    case "object":
+      Object.entries(def.shape).forEach(([key, field]) =>
+        validateSchema(field, [...path, key]),
       );
-      validateSchema(def.catchall, path);
+      if (def.catchall) {
+        validateSchema(def.catchall, path);
+      }
       break;
-    case z.ZodFirstPartyTypeKind.ZodArray:
-      validateSchema(def.type, [...path, "[]"]);
+    case "array":
+      validateSchema(def.element, [...path, "[]"]);
       break;
-    case z.ZodFirstPartyTypeKind.ZodUnion:
-    case z.ZodFirstPartyTypeKind.ZodDiscriminatedUnion:
-      def.options.forEach((option: z.ZodTypeAny) =>
-        validateSchema(option, path),
-      );
+    // Covers both z.union and z.discriminatedUnion
+    case "union":
+      def.options.forEach((option) => validateSchema(option, path));
       break;
-    case z.ZodFirstPartyTypeKind.ZodIntersection:
+    case "intersection":
       validateSchema(def.left, path);
       validateSchema(def.right, path);
       break;
-    case z.ZodFirstPartyTypeKind.ZodTuple:
-      def.items.forEach((item: z.ZodTypeAny, idx: number) => {
-        return validateSchema(item, [...path, idx.toString()]);
+    case "tuple":
+      def.items.forEach((item, idx) => {
+        validateSchema(item, [...path, idx.toString()]);
       });
+      if (def.rest) {
+        validateSchema(def.rest, [...path, "[]"]);
+      }
       break;
-    case z.ZodFirstPartyTypeKind.ZodRecord:
+    case "record":
       validateSchema(def.valueType, [...path, "[]"]);
       break;
 
-    case z.ZodFirstPartyTypeKind.ZodDefault:
-    case z.ZodFirstPartyTypeKind.ZodNullable:
-    case z.ZodFirstPartyTypeKind.ZodOptional:
+    case "default":
+    case "prefault":
+    case "nullable":
+    case "optional":
+    case "nonoptional":
+    case "readonly":
+    case "catch":
       validateSchema(def.innerType, path);
       break;
-    case z.ZodFirstPartyTypeKind.ZodEffects:
-      validateSchema(def.schema, path);
+    // Transform chains (.transform()) are pipes; validate their input side
+    case "pipe":
+      validateSchema(def.in, path);
+      break;
+    case "lazy":
+      validateSchema(def.getter(), path);
       break;
 
-    case z.ZodFirstPartyTypeKind.ZodEnum:
-    case z.ZodFirstPartyTypeKind.ZodNativeEnum:
-    case z.ZodFirstPartyTypeKind.ZodLiteral:
-    case z.ZodFirstPartyTypeKind.ZodNumber:
-    case z.ZodFirstPartyTypeKind.ZodDate:
-    case z.ZodFirstPartyTypeKind.ZodBoolean:
-    case z.ZodFirstPartyTypeKind.ZodNever:
-    case z.ZodFirstPartyTypeKind.ZodAny:
-    case z.ZodFirstPartyTypeKind.ZodUnknown:
+    // "custom" is z.instanceof()/z.custom(), and "transform" is the output
+    // half of a .transform() pipe - nothing to walk in either
+    case "enum":
+    case "literal":
+    case "number":
+    case "date":
+    case "boolean":
+    case "never":
+    case "any":
+    case "unknown":
+    case "custom":
+    case "transform":
       // No validation needed
       break;
 
-    case z.ZodFirstPartyTypeKind.ZodString: {
+    case "string": {
       // String fields must not accept empty strings, unless they're
       // specifically allowedEmptyString
       if (schema === allowedEmptyString) break;
 
-      const result = schema.safeParse("");
+      const result = (schema as z.ZodType).safeParse("");
       if (result.success) {
         throw new Error(
           `String fields must not accept empty strings (${path.join(".")})`,
@@ -72,6 +90,6 @@ export default function validateSchema<T extends z.ZodFirstPartySchemaTypes>(
     }
 
     default:
-      throw new Error(`Unknown schema type: ${def.typeName}`);
+      throw new Error(`Unknown schema type: ${def.type}`);
   }
 }

@@ -677,7 +677,7 @@ const UserSchema = z.object({
 
   // Optional protected fields
   apiKey: denyUntrusted(nonEmptyString.optional()),
-  internalFlags: denyUntrusted(z.record(z.boolean()).optional()),
+  internalFlags: denyUntrusted(z.record(z.string(), z.boolean()).optional()),
 });
 
 const Users = new Model({ name: 'users', schema: UserSchema });
@@ -784,7 +784,7 @@ await Tasks.collection.insertAsync({
 3. **System Metadata**
    ```typescript
    internalId: denyUntrusted(nonEmptyString.optional())
-   flags: denyUntrusted(z.record(z.boolean()))
+   flags: denyUntrusted(z.record(z.string(), z.boolean()))
    status: denyUntrusted(z.enum(['active', 'suspended', 'deleted']))
    ```
 

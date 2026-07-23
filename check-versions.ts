@@ -3,7 +3,7 @@ import { checkNpmVersions } from 'meteor/tmeasday:check-npm-versions';
 
 checkNpmVersions(
   {
-    'zod': '3.23.x',
+    'zod': '^4.0.0',
   },
   'typed:model',
 );

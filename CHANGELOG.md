@@ -1,5 +1,78 @@
 # Typed Model Change Log
 
+## v2.0.0
+
+### Breaking Changes
+
+- **Zod 4 required.** The package now targets Zod 4 (`^4.0.0`, tested against 4.4.3) and no longer
+  supports Zod 3. All schema introspection (schema relaxation for updates, MongoDB JSON Schema
+  generation, `denyUntrusted` field extraction, schema policy validation) was rewritten against
+  Zod 4's internals (`_zod.def`, the new checks system, `ZodPipe` transform chains).
+  - Apps must upgrade their own schemas to Zod 4. See the official
+    [Zod migration guide](https://zod.dev/v4/changelog) — notably `.default()` now short-circuits
+    (use `.prefault()` for Zod 3 behavior), and `z.record()` requires an explicit key schema.
+  - Public type signatures are preserved: `ModelType`, `Selector`, `FieldsOf`, `ModelResultType`,
+    and the inferred input/output types of all CRUD and query methods work as before (verified by
+    the compile-time type assertion suite).
+  - Deprecated-but-supported Zod 4 APIs (`z.string().email()`, `z.nativeEnum()`, `.passthrough()`)
+    continue to work in schemas passed to this package.
+  - New Zod 4 string formats that carry a regex pattern (e.g. `z.string().startsWith()`,
+    `.lowercase()`) are now representable in generated MongoDB JSON Schema validators.
+
+### Features
+
+- **NEW**: Opt-in database-level validation via `attachValidator: true`
+  - Generates a MongoDB JSON Schema validator from your Zod schema and attaches it to the collection
+  - Uses `createCollection` for new collections, `collMod` for existing ones
+  - Enforces `validationLevel: 'strict'` and `validationAction: 'error'`
+  - Defense-in-depth: writes that bypass Meteor entirely (`rawCollection()`, admin tools, other services) are still validated
+  - Server-only; ignored on the client
+  - Write methods await attachment internally, so there is no race between construction and the first operation
+  - `bypassSchema` bypasses the database layer too, via `bypassDocumentValidation: true`
+  - See [Database-Level Validation](README.md#database-level-validation)
+
+### Bug Fixes
+
+- **FIX**: The internal `_meteortypedmodelTrusted` marker is no longer persisted into MongoDB documents.
+  The marker is stripped by deny rules, which only run for client-initiated writes, so every server-side
+  `insertAsync`, `updateAsync`, and `upsertAsync` was writing it into the stored document. It is now only
+  added on the client, where the deny rules that consume it actually run.
+- **FIX**: The `zod` peer requirement was pinned to `3.23.x`, which failed the version check against
+  any newer zod. It is now `^4.0.0`, matching the Zod 4 requirement above.
+- **FIX**: `find()`, `findOne()`, and `findOneAsync()` called **without** a field projection now
+  return the full document type. Previously the projection type parameter fell back to its
+  `FieldsOf` constraint, which resolved every field in the result type to `never` — silently
+  removing type safety from unprojected queries. Projected queries are unchanged and still narrow
+  the result to the selected fields.
+- **FIX** ([#1](https://github.com/copleykj/meteor-typed-model/issues/1)): Wrapping an existing
+  collection typed independently of the schema — most notably `Meteor.users` — did not compile.
+  The constructor's `collection` parameter was typed `Mongo.Collection<z.output<Schema>>`, and
+  since the `Collection` generic is invariant, `Mongo.Collection<Meteor.User>` was never
+  assignable to it. The parameter is now `Mongo.Collection<any>` (as `docs/API.md` always
+  documented); the Model's own schema typing governs everything from there. The README's
+  "Working With Existing Collections" example was also corrected: it used `z.string()` for
+  `username`, which violates the non-empty-string policy and made Model construction throw.
+
+### Testing
+
+- **FIX**: The 32 client-side tests were silently not running (reported as `0 passing`). The shared test
+  entry point pulled suites in with dynamic `import()`; on the client those are fetched over DDP and did
+  not resolve until after the test driver had finished, so no tests were ever registered. Split into
+  per-architecture entry points (`tests/server.ts`, `tests/client.ts`) using static imports.
+- Add `tests/unit/DatabaseValidation.test.ts` covering opt-in behavior, `createCollection`/`collMod`
+  attachment paths, both validation layers, `bypassSchema`, attachment-failure handling, and
+  marker-leak regressions for insert, update, and upsert
+- Add compile-time type assertions locking in the public type contract: `updateAsync`/`upsertAsync`
+  return types, full-document result types for unprojected `find`/`findOneAsync`, field-projection
+  narrowing, `withCommon` output types, and input-side omission of system-managed fields
+- Add regression coverage for the typing collapse reported on the Meteor forums when using v1.x
+  with zod 4 installed (v1's three-parameter `z.ZodObject<Shape, UnknownKeys, Catchall>` references
+  don't resolve against zod 4's two-parameter `ZodObject`, so `withCommon` results and
+  `insertAsync`'s `doc` parameter degraded to `any`): `@ts-expect-error` assertions now prove the
+  `doc` parameter rejects wrong field types, missing required fields, and unknown fields, for both
+  plain and `withCommon` schemas
+- Test suite now at **144 tests** (112 server + 32 client)
+
 ## v1.0.0 (2025-11-10)
 
 **🎉 First stable release!**

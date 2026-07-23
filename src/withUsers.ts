@@ -10,11 +10,10 @@ export const UserFields = {
 export default function withUsers<T extends MongoRecordZodType>(
   schema: T,
 ): T extends z.ZodObject<
-  infer Shape extends z.ZodRawShape,
-  infer UnknownKeys,
-  infer Catchall
+  infer Shape extends z.core.$ZodShape,
+  infer Config extends z.core.$ZodObjectConfig
 >
-  ? z.ZodObject<Shape & typeof UserFields, UnknownKeys, Catchall>
+  ? z.ZodObject<z.util.Extend<Shape, typeof UserFields>, Config>
   : z.ZodIntersection<T, z.ZodObject<typeof UserFields>> {
   if (schema instanceof z.ZodObject) {
     const alreadyContainsFields = Object.keys(UserFields).some(
