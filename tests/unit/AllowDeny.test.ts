@@ -4,6 +4,7 @@ import { assert } from "chai";
 import { z } from "zod";
 import { Model, CustomTypes } from "meteor/typed:model";
 import type { MongoRecordZodType } from "../../src/generateJsonSchema";
+import assertRejectsWithZodError from "../lib/assertRejectsWithZodError";
 
 const { nonEmptyString, stringId } = CustomTypes;
 
@@ -47,21 +48,19 @@ describe("AllowDeny", function () {
       assert.isString(validId);
 
       // Invalid insert should fail validation from Model's insertAsync
-      await assert.isRejected(
+      await assertRejectsWithZodError(
         model.insertAsync({
           name: "test",
           // missing count
         } as any),
-        z.ZodError
       );
 
       // Invalid insert should fail validation (empty string)
-      await assert.isRejected(
+      await assertRejectsWithZodError(
         model.insertAsync({
           name: "", // empty string not allowed
           count: 5,
         }),
-        z.ZodError
       );
 
       // Note: Direct collection.insertAsync bypasses Model validation when called from server
@@ -94,11 +93,10 @@ describe("AllowDeny", function () {
       assert.equal(updated?.name, "updated");
 
       // Invalid update should fail validation from Model's updateAsync
-      await assert.isRejected(
+      await assertRejectsWithZodError(
         model.updateAsync(id, {
           $set: { name: "" }, // empty string not allowed
         }),
-        z.ZodError
       );
 
       // Note: Direct collection.updateAsync bypasses Model validation when called from server
@@ -439,7 +437,7 @@ describe("AllowDeny", function () {
         assert.fail("Should have thrown validation error");
       } catch (error: any) {
         assert.instanceOf(error, z.ZodError);
-        assert.isArray(error.errors);
+        assert.isArray(error.issues);
         // Zod errors have proper structure for debugging
       }
 

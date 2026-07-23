@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Meteor package that provides a Zod-validated, type-safe wrapper around Meteor's `Mongo.Collection`. The package enables runtime validation of MongoDB documents using Zod schemas while maintaining full TypeScript type safety. Extracted from the [JollyRoger](https://github.com/deathandmayhem/jolly-roger) project by Evan Broder.
 
+**This is the 1.x maintenance branch, targeting Zod 3 (`^3.23.0`).** New feature development happens on `main` (2.x, Zod 4); only bug fixes land here. The Model class supports opt-in database-level validation via `attachValidator: true` (MongoDB JSON Schema generated from the Zod schema; `createCollection` for new collections, `collMod` for existing ones; write methods await attachment, and attachment failures surface as rejections from the first CRUD operation).
+
 ## Development Commands
 
 ### Build and Type Checking
@@ -286,23 +288,37 @@ TEST_BROWSER_DRIVER=playwright meteor test-packages ./ --once --driver-package m
 
 ```
 tests/
-├── main.ts                       # Test entry point (imports all test suites)
+├── server.ts                     # Server test entry point
+├── client.ts                     # Client test entry point
 ├── lib/
 │   ├── AssertTypesEqual.ts      # TypeScript type equality assertion utility
+│   ├── assertRejectsWithZodError.ts # Rejection assertion shared with the 2.x line
+│   ├── clientTestModels.ts      # Shared models defined on both client and server
 │   └── resetDatabase.ts         # Database cleanup helper for test isolation
 ├── unit/                         # Server-side tests
-│   ├── Model.test.ts            # Core Model CRUD and validation tests (~15KB)
-│   ├── generateJsonSchema.test.ts # JSON schema generation tests (~20KB)
-│   └── validateSchema.test.ts    # Schema validation policy tests (~1KB)
+│   ├── Model.test.ts            # Core Model CRUD and validation tests
+│   ├── generateJsonSchema.test.ts # JSON schema generation tests
+│   ├── validateSchema.test.ts    # Schema validation policy tests
+│   ├── AllowDeny.test.ts        # Allow/deny rule integration tests
+│   ├── DenyUntrusted.test.ts    # Protected field tests
+│   ├── DatabaseValidation.test.ts # attachValidator / MongoDB JSON Schema tests
+│   └── ExistingCollection.test.ts # Wrapping Meteor.users / issue #1 regression
 └── client/                       # Client-side tests
-    └── basic.test.ts            # Basic package loading and functionality tests
+    ├── basic.test.ts            # Basic package loading and functionality tests
+    └── DenyUntrusted.test.ts    # Client-side protected field enforcement
 ```
+
+**Entry points must use static imports.** `package.js` registers a separate
+`api.mainModule` per architecture. Suites are pulled in with static `import`
+statements rather than dynamic `import()`, because on the client a dynamic
+import is fetched over DDP and does not resolve until after the test driver has
+already run — which silently yields zero registered tests.
 
 ### Test Coverage
 
-The package includes **49 comprehensive tests**: 45 server-side tests and 4 client-side tests, all passing.
+The package includes **143 tests**: 111 server-side and 32 client-side tests, all passing.
 
-#### Server-Side Tests (45 tests)
+#### Server-Side Tests (111 tests)
 
 **Model.test.ts** (`tests/unit/Model.test.ts`) - 17 tests
 - `bypassSchema` option testing for insert and update operations
@@ -329,7 +345,7 @@ The package includes **49 comprehensive tests**: 45 server-side tests and 4 clie
 - `nonEmptyString` helper validation
 - `allowedEmptyString` explicit opt-in
 
-#### Client-Side Tests (4 tests)
+#### Client-Side Tests (32 tests)
 
 **basic.test.ts** (`tests/client/basic.test.ts`) - 4 tests
 - Package loading and exports verification

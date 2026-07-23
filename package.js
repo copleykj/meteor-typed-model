@@ -1,7 +1,7 @@
 /* global Package, Npm */
 Package.describe({
   name: 'typed:model',
-  version: '1.0.0',
+  version: '1.1.0',
   summary: 'A Zod validated wrapper around Meteor\'s Mongo.Collection for your meteor app',
   git: 'https://github.com/copleykj/meteor-typed-model',
   documentation: 'README.md'
@@ -23,6 +23,8 @@ Package.onTest(function(api) {
   api.use('mongo');
   api.use('random');
   api.use('autopublish');
+  // Provides Meteor.users for the existing-collection wrapping tests
+  api.use('accounts-base');
   api.use('meteortesting:mocha@3.2.0');
   api.use('typed:model');
 
@@ -31,6 +33,6 @@ Package.onTest(function(api) {
     'playwright': '1.48.0'
   });
 
-  api.mainModule('tests/main.ts', 'server');
-  api.mainModule('tests/main.ts', 'client');
+  api.mainModule('tests/server.ts', 'server');
+  api.mainModule('tests/client.ts', 'client');
 });

@@ -15,6 +15,7 @@ import {
   stringId,
 } from "./customTypes";
 import type { MongoRecordZodType } from "./generateJsonSchema";
+import generateJsonSchema from "./generateJsonSchema";
 import validateSchema from "./validateSchema";
 import type { AllowRules, DenyRules } from "./allowDeny";
 import {
@@ -39,6 +40,15 @@ export type SelectorToResultType<
 
 export type FieldsOf<T> = {
   [_K in keyof T]?: 1 | 0;
+};
+
+// The default field projection when none is passed: every field selected. If a
+// query method's F parameter were left to fall back to its FieldsOf constraint
+// (whose values are all `1 | 0 | undefined`), every field in the result type
+// would resolve to `never`, silently destroying type safety on unprojected
+// queries.
+export type AllFieldsOf<T> = {
+  [_K in keyof T]: 1;
 };
 
 export type SelectedFields<T, F extends FieldsOf<T>> = {
@@ -468,7 +478,16 @@ class Model<
   // Fields marked with denyUntrusted() that should not be modifiable by client code
   private protectedFields: Set<string> = new Set();
 
-  constructor({ name, schema, idSchema, collection }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<z.output<Schema>> }) {
+  // Track validator attachment promise for ensuring it completes before CRUD operations
+  private validatorAttached: Promise<void> | null = null;
+
+  // The collection parameter is deliberately Mongo.Collection<any>: wrapping an
+  // existing collection (e.g. Meteor.users) is a primary use case, and
+  // Collection's generic parameter is invariant, so no schema output type would
+  // ever be assignable from a collection typed independently of this schema
+  // (Collection<Meteor.User> vs Collection<z.output<Schema>>). The Model's own
+  // typing takes over from here.
+  constructor({ name, schema, idSchema, collection, attachValidator = false }: { name: string, schema: Schema, idSchema?: IdSchema, collection?: Mongo.Collection<any>, attachValidator?: boolean }) {
     this.schema =
       schema instanceof z.ZodObject
         ? schema.extend({ _id: idSchema ?? stringId })
@@ -476,7 +495,10 @@ class Model<
     validateSchema(this.schema);
     this.name = name;
     this.relaxedSchema = relaxSchema(this.schema);
-    this.collection = collection || new Mongo.Collection(name);
+    // The property's type is phrased in terms of this["schema"], which the
+    // constructor parameter can't reference; the two are equivalent
+    this.collection = (collection ||
+      new Mongo.Collection(name)) as Mongo.Collection<z.output<this["schema"]>>;
     AllModels.add(this);
 
     // Extract fields marked with denyUntrusted() for protection
@@ -489,6 +511,16 @@ class Model<
     // Handle insecure mode by adding permissive allow rules
     if (isInsecureMode()) {
       this.setupInsecureModeAllowRules();
+    }
+
+    // Kick off validator attachment if enabled (server-side only). Constructors
+    // can't be async, so a failure can't be thrown from here -- it is re-thrown
+    // by ensureValidatorAttached() on the first CRUD operation instead. The
+    // no-op catch marks the rejection as handled so Node doesn't treat it as an
+    // unhandled rejection while no operation is awaiting it.
+    if (Meteor.isServer && attachValidator) {
+      this.validatorAttached = this.attachValidator();
+      this.validatorAttached.catch(() => { /* surfaced via ensureValidatorAttached() */ });
     }
   }
 
@@ -745,12 +777,57 @@ class Model<
     return fields;
   }
 
+  /**
+   * Ensure validator is attached before performing CRUD operations
+   * Call this at the start of all write methods to avoid race conditions
+   */
+  private async ensureValidatorAttached(): Promise<void> {
+    if (this.validatorAttached) {
+      await this.validatorAttached;
+    }
+  }
+
+  /**
+   * Attach MongoDB JSON Schema validator to the collection
+   * Handles both new collections (createCollection) and existing collections (collMod)
+   * Rejects if attachment fails; the error is surfaced by ensureValidatorAttached()
+   */
+  private async attachValidator(): Promise<void> {
+    const jsonSchema = generateJsonSchema(this.schema);
+    const validator = { $jsonSchema: jsonSchema };
+
+    try {
+      // Try to create collection with validator (for new collections)
+      await this.collection
+        .rawDatabase()
+        .createCollection(this.name, { validator });
+    } catch (e: any) {
+      // Collection already exists, use collMod to add/update validator
+      if (e.code === 48 || e.codeName === 'NamespaceExists') {
+        await this.collection
+          .rawDatabase()
+          .command({
+            collMod: this.name,
+            validator,
+            validationLevel: 'strict',  // Validate all inserts and updates
+            validationAction: 'error'   // Reject invalid documents
+          });
+      } else {
+        // Any other error: throw and halt
+        throw new Error(
+          `Failed to attach validator to collection ${this.name}: ${e.message || String(e)}`
+        );
+      }
+    }
+  }
+
   async insertAsync(
     doc: z.input<this["schema"]>,
     options: {
       bypassSchema?: boolean | undefined;
     } = {},
   ): Promise<z.output<IdSchema>> {
+    await this.ensureValidatorAttached();
     const { bypassSchema } = options;
     if (bypassSchema) {
       // bypassSchema is only available on the server
@@ -808,9 +885,14 @@ class Model<
       },
     );
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before insert
-      const markedDoc: any = { ...parsed, _meteortypedmodelTrusted: true };
+      // Add a marker to indicate this is a trusted Model method transform.
+      // Deny rules check the marker and remove it before the write reaches
+      // MongoDB, but they only run for client-initiated operations. Adding it
+      // server-side would persist it into the document, so only mark on the
+      // client.
+      const markedDoc: any = Meteor.isClient
+        ? { ...parsed, _meteortypedmodelTrusted: true }
+        : parsed;
       return await this.collection.insertAsync(markedDoc);
     } catch (e) {
       formatValidationError(e);
@@ -834,6 +916,7 @@ class Model<
       bypassSchema?: boolean | undefined;
     } = {},
   ): Promise<number> {
+    await this.ensureValidatorAttached();
     const { bypassSchema = false, ...mongoOptions } = options;
 
     // Note that Meteor's update implementation will drop options that it
@@ -899,12 +982,13 @@ class Model<
 
     const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before update
-      const markedModifier: any = {
-        ...parsed,
-        $set: { ...parsed.$set, _meteortypedmodelTrusted: true }
-      };
+      // Only mark on the client -- see the note in insertAsync.
+      const markedModifier: any = Meteor.isClient
+        ? {
+            ...parsed,
+            $set: { ...parsed.$set, _meteortypedmodelTrusted: true }
+          }
+        : parsed;
       return await this.collection.updateAsync(selector, markedModifier, mongoOptions);
     } catch (e) {
       formatValidationError(e);
@@ -927,6 +1011,7 @@ class Model<
     numberAffected?: number | undefined;
     insertedId?: z.output<IdSchema> | undefined;
   }> {
+    await this.ensureValidatorAttached();
     // On client: Check if user is trying to modify protected fields directly
     if (Meteor.isClient && this.protectedFields.size > 0) {
       const modifiedFields = this.extractModifiedFields(modifier);
@@ -950,12 +1035,13 @@ class Model<
 
     const parsed = await parseMongoModifierAsync(this.relaxedSchema, modifier);
     try {
-      // Add a marker to indicate this is a trusted Model method transform
-      // This marker is checked by deny rules and then removed before upsert
-      const markedModifier: any = {
-        ...parsed,
-        $setOnInsert: { ...parsed.$setOnInsert, _meteortypedmodelTrusted: true }
-      };
+      // Only mark on the client -- see the note in insertAsync.
+      const markedModifier: any = Meteor.isClient
+        ? {
+            ...parsed,
+            $setOnInsert: { ...parsed.$setOnInsert, _meteortypedmodelTrusted: true }
+          }
+        : parsed;
       return (await this.collection.upsertAsync(
         selector,
         markedModifier,
@@ -970,6 +1056,7 @@ class Model<
   async removeAsync(
     selector: Selector<z.output<this["schema"]>>,
   ): Promise<number> {
+    await this.ensureValidatorAttached();
     return this.collection.removeAsync(selector);
   }
 
@@ -979,7 +1066,9 @@ class Model<
   find<
     S extends Selector<z.output<this["schema"]>>,
     O extends Omit<Mongo.Options<z.output<this["schema"]>>, "transform">,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.find(selector ?? {}, options) as Mongo.Cursor<
       ModelResultType<z.output<this["schema"]>, S, F>
@@ -992,7 +1081,9 @@ class Model<
       Mongo.Options<z.output<this["schema"]>>,
       "limit" | "transform"
     >,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.findOne(selector ?? {}, options) as
       | ModelResultType<z.output<this["schema"]>, S, F>
@@ -1005,7 +1096,9 @@ class Model<
       Mongo.Options<z.output<this["schema"]>>,
       "limit" | "transform"
     >,
-    F extends FieldsOf<z.output<this["schema"]>>
+    F extends FieldsOf<z.output<this["schema"]>> = AllFieldsOf<
+      z.output<this["schema"]>
+    >
   >(selector?: S, options?: O & { fields?: F }) {
     return this.collection.findOneAsync(selector ?? {}, options) as Promise<
       ModelResultType<z.output<this["schema"]>, S, F> | undefined
